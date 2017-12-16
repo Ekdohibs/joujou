@@ -179,6 +179,8 @@ let rec sequential_let (xs : variable list) (vs : value list) (t : term) =
   match xs, vs with
   | [], [] ->
       t
+  | x :: xs, VVar v :: vs ->
+      rename_term (Atom.Map.singleton x v) (sequential_let xs vs t)
   | x :: xs, v :: vs ->
       LetVal (x, v, sequential_let xs vs t)
   | _ ->
@@ -191,3 +193,20 @@ let parallel_let (xs : variable list) (vs : value list) (t : term) =
   assert (Atom.Set.disjoint (Atom.Set.of_list xs) (fv_values vs));
   sequential_let xs vs t
 
+let rec simpl (t : term) : term =
+  match t with
+  | Exit | TailCall _ | Print _ -> t
+  | LetVal (x, VVar v, t) ->
+    rename_term (Atom.Map.singleton x v) (simpl t)
+  | LetVal (x, v, t) -> LetVal (x, v, simpl t)
+  | LetBlo (f, Lam (self, args, body), t) ->
+    let t = simpl t in
+    let body = simpl body in
+    begin match t with
+      | TailCall (VVar f1, vals) when Atom.equal f f1 && self = NoSelf ->
+        parallel_let args vals body
+      | _ -> LetBlo (f, Lam (self, args, body), t)
+    end
+  | IfZero (v, t1, t2) -> IfZero (v, simpl t1, simpl t2)
+
+let optimize = simpl

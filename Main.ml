@@ -86,7 +86,9 @@ let process filename =
   |> Cook.cook_term
   |> dump "Lambda" Lambda.show_term
   |> CPS.cps_term
-  |> dump "Tail" Tail.show_term
+  |> dump "Tail - 1" Tail.show_term
+  |> Tail.optimize
+  |> dump "Tail - 2" Tail.show_term
   |> Defun.defun_term
   |> dump "Top" Top.show_program
   |> Finish.finish_program
