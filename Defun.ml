@@ -53,13 +53,15 @@ let rec defun (t : S.term) (st : defun_state) : T.term =
   match t with
   | S.Exit -> T.Exit
   | S.TailCall (S.VVar f, args) when Atom.Map.mem f st.toplevel_functions ->
-    defun_values st (fun args -> T.TailCall (fst (Atom.Map.find f st.toplevel_functions), args)) args
+    defun_values st (fun args ->
+        T.TailCall (fst (Atom.Map.find f st.toplevel_functions), args)) args
   | S.TailCall (f, args) ->
     let arity = List.length args in
     let app, _, _ = get_apply_def st arity in
     defun_values st (fun args -> T.TailCall (app, args)) (f :: args)
   | S.Print (v, t) -> defun_value st (fun v -> T.Print (v, defun t st)) v
-  | S.LetVal (x, v, t) -> defun_value st (fun v -> T.LetVal (x, v, defun t st)) v
+  | S.LetVal (x, v, t) ->
+    defun_value st (fun v -> T.LetVal (x, v, defun t st)) v
   | S.LetBlo (f, (S.Lam (self, args, body) as blo), t) ->
     let fv = Atom.Set.(elements
        (diff (S.fv_block blo) (Atom.Map.domain st.toplevel_functions))) in
