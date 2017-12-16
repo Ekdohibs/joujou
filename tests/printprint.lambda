@@ -1,0 +1,2 @@
+(* Because [print] returns its argument, this program should print 42 twice. *)
+print (print 42)

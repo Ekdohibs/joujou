@@ -1,0 +1,10 @@
+(* This program is supposed to never terminate.
+   This can actually work if the C compiler is
+   smart enough to recognize and optimize tail
+   calls. It works for me with clang but not with
+   gcc, for some reason. *)
+let rec loop = fun x ->
+  let _ = print x in
+  loop (x + 1)
+in
+loop 0

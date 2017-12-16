@@ -1,0 +1,88 @@
+(* Thunks. *)
+let force = fun x -> x 0 in
+(* Church Booleans. *)
+let false = fun x -> fun y -> y in
+let true = fun x -> fun y -> x in
+let k = true in
+let cond = fun p -> fun x -> fun y -> p x y in
+let forcecond = fun p -> fun x -> fun y -> force (p x y) in
+let bool2int = fun b -> cond b 1 0 in
+let _ = print (bool2int true) in
+let _ = print (bool2int false) in
+(* Church pairs. *)
+let pair = fun x -> fun y -> fun p -> cond p x y in
+let fst = fun p -> p true in
+let snd = fun p -> p false in
+(* Church naturals. *)
+let zero = fun f -> fun x -> x in
+let one = fun f -> fun x -> f x in
+let plus = fun m -> fun n -> fun f -> fun x -> m f (n f x) in
+let two = plus one one in
+let three = plus one two in
+let four = plus two two in
+let five = plus four one in
+let six = plus four two in
+let succ = plus one in
+let mult = fun m -> fun n -> fun f -> m (n f) in
+let exp = fun m -> fun n -> n m in
+let is_zero = fun n -> n (k false) true in
+let convert = fun n -> n (fun x -> x + 1) 0 in
+let _ = print (bool2int (is_zero zero)) in
+let _ = print (bool2int (is_zero one)) in
+let _ = print (bool2int (is_zero two)) in
+(* Factorial, based on Church naturals. *)
+let loop = fun p ->
+  let n = succ (fst p) in
+  pair n (mult n (snd p))
+in
+let fact = fun n ->
+  snd (n loop (pair zero one))
+in
+let _ = print (convert (fact four)) in
+let _ = print (convert (fact five)) in
+(* Fibonacci, based on Church naturals. *)
+let loop = fun p ->
+  let fib1 = fst p in
+  pair (plus fib1 (snd p)) fib1
+in
+let fib = fun n ->
+  snd (n loop (pair one one))
+in
+let _ = print (convert (fib five)) in
+let _ = print (convert (fib six)) in
+(* Predecessor. *)
+let loop = fun p ->
+  let pred = fst p in
+  pair (succ pred) pred
+in
+let pred = fun n ->
+  snd (n loop (pair zero zero))
+in
+let _ = print (convert (pred six)) in
+(* Comparison, yielding a Church Boolean. *)
+let geq = fun m -> fun n ->
+  m pred n (k false) true
+in
+let _ = print (bool2int (geq four six)) in
+let _ = print (bool2int (geq six one)) in
+(* Iteration. *)
+let iter = fun f -> fun n ->
+  n f (f one)
+in
+(* Ackermann's function. *)
+let ack = fun n -> n iter succ n in
+let _ = print (convert (ack two)) in
+(* A fixpoint. *)
+let fix = fun f -> (fun y -> f (fun z -> y y z)) (fun y -> f (fun z -> y y z)) in
+(* Another version of fact. *)
+let fact = fun n ->
+  fix (fun fact -> fun n -> forcecond (is_zero n) (fun _ -> one) (fun _ -> mult n (fact (pred n)))) n
+in
+let _ = print (convert (fact zero)) in
+let _ = print (convert (fact one)) in
+let _ = print (convert (fact two)) in
+let _ = print (convert (fact three)) in
+let _ = print (convert (fact four)) in
+let _ = print (convert (fact five)) in
+
+print 42

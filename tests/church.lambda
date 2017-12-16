@@ -1,0 +1,16 @@
+let i = fun x -> x in
+let k = fun x -> fun y -> x in
+let zero = fun f -> i in
+let one = fun f -> fun x -> f x in
+let plus = fun m -> fun n -> fun f -> fun x -> m f (n f x) in
+let succ = plus one in
+let mult = fun m -> fun n -> fun f -> m (n f) in
+let exp = fun m -> fun n -> n m in
+let two = succ one in
+let three = succ two in
+let six = mult two three in
+let seven = succ six in
+let twenty_one = mult three seven in
+let forty_two = mult two twenty_one in
+let convert = fun n -> n (fun x -> x + 1) 0 in
+print (convert forty_two)

@@ -1,0 +1,9 @@
+S kremlin
+S alphalib
+B _build
+B _build/kremlin
+B _build/alphalib
+PKG unix
+PKG process
+PKG pprint
+PKG ppx_deriving.std
