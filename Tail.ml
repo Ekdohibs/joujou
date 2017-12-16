@@ -130,3 +130,59 @@ and fv_term (t : term) =
       union
         (fv_block b1)
         (remove x (fv_term t2))
+
+let rec rename_value (r : Atom.atom Atom.Map.t) (v : value) =
+  match v with
+  | VVar x ->
+    VVar (try Atom.Map.find x r
+          with Not_found -> x)
+  | VLit _ -> v
+  | VBinOp (v1, op, v2) -> VBinOp (rename_value r v1, op, rename_value r v2)
+
+and rename_values (r : Atom.atom Atom.Map.t) (vs : value list) =
+  List.map (rename_value r) vs
+
+and rename_lambda (r : Atom.atom Atom.Map.t) (xs : variable list) (t : term) =
+  assert (not (List.exists (fun v -> Atom.Map.mem v r) xs));
+  rename_term r t
+
+and rename_block (r : Atom.atom Atom.Map.t) (b : block) =
+  match b with
+  | Lam (NoSelf, xs, t) ->
+      Lam (NoSelf, xs, rename_lambda r xs t)
+  | Lam (Self f, xs, t) ->
+      Lam (Self f, xs, rename_lambda r (f :: xs) t)
+
+and rename_term (r : Atom.atom Atom.Map.t) (t : term) =
+  match t with
+  | Exit -> Exit
+  | TailCall (v, vs) ->
+    TailCall (rename_value r v, rename_values r vs)
+  | Print (v1, t2) ->
+    Print (rename_value r v1, rename_term r t2)
+  | LetVal (x, v1, t2) ->
+    assert (not (Atom.Map.mem x r));
+    LetVal (x, rename_value r v1, rename_term r t2)
+  | LetBlo (x, b1, t2) ->
+    assert (not (Atom.Map.mem x r));
+    LetBlo (x, rename_block r b1, rename_term r t2)
+
+
+(* [let x_1 = v_1 in ... let x_n = v_n in t] *)
+
+let rec sequential_let (xs : variable list) (vs : value list) (t : term) =
+  match xs, vs with
+  | [], [] ->
+      t
+  | x :: xs, v :: vs ->
+      LetVal (x, v, sequential_let xs vs t)
+  | _ ->
+      assert false
+
+(* [let x_1 = v_1 and ... x_n = v_n in t] *)
+
+let parallel_let (xs : variable list) (vs : value list) (t : term) =
+  assert (List.length xs = List.length vs);
+  assert (Atom.Set.disjoint (Atom.Set.of_list xs) (fv_values vs));
+  sequential_let xs vs t
+
