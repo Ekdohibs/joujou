@@ -1,9 +1,16 @@
 %token<string> IDENT
 %token<int> INTLITERAL
 %token FUN IN LET PRINT REC
+%token IFZERO THEN ELSE
 %token ARROW EQ LPAREN RPAREN
 %token<RawLambda.binop> MULOP ADDOP
 %token EOF
+
+%nonassoc ARROW IN
+%nonassoc IFZERO
+%nonassoc ELSE
+%left ADDOP
+%left MULOP
 
 %start<RawLambda.term> entry
 
@@ -29,8 +36,6 @@ entry:
 
    atomic_term             -- unambiguously delimited terms
    application_term        -- n-ary applications of atomic terms
-   multiplicative_term     -- built using multiplication & division
-   additive_term           -- built using addition & subtraction
    any_term                -- everything
 
    A [match/with/end] construct is terminated with an [end] keyword, as in Coq,
@@ -60,13 +65,19 @@ application_term_:
   t = left_associative_level(multiplicative_term_, ADDOP, mkbinop)
     { t }
 
+%inline binop:
+| op = MULOP { op }
+| op = ADDOP { op }
+
 any_term_:
-| t = additive_term_
-    { t }
+| t = application_term_ { t }
+| t1 = any_term op = binop t2 = any_term { BinOp (t1, op, t2) }
 | FUN x = IDENT ARROW t = any_term
     { Lam (x, t) }
 | LET mode = recursive x = IDENT EQ t1 = any_term IN t2 = any_term
     { Let (mode, x, t1, t2) }
+| IFZERO t1 = any_term THEN t2 = any_term ELSE t3 = any_term
+    { IfZero (t1, t2, t3) }
 
 %inline any_term:
   t = placed(any_term_)

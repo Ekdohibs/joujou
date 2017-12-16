@@ -31,6 +31,7 @@ let rec simpl (t : S.term) : S.term =
         S.parallel_let args vals body
       | _ -> S.LetBlo (f, S.Lam (self, args, body), t)
     end
+  | S.IfZero (v, t1, t2) -> S.IfZero (v, simpl t1, simpl t2)
 
 let get_apply_def (st : defun_state) (arity : int) =
   try
@@ -73,6 +74,7 @@ let rec defun (t : S.term) (st : defun_state) : T.term =
     st.apply_defs <- IMap.add arity (app, aargs, branch :: branches) st.apply_defs;
     st.extracted_functions <- fdef :: st.extracted_functions;
     T.LetBlo (f, T.Con (tag, T.vvars fv), nt)
+  | S.IfZero (v, t1, t2) -> T.IfZero (v, defun t1 st, defun t2 st)
 
 let defun_term (t : S.term) : T.program =
   let st = { extracted_functions = []; apply_defs = IMap.empty } in

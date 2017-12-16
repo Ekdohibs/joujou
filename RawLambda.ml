@@ -30,6 +30,7 @@ and term_ =
   | BinOp of term * binop * term
   | Print of term
   | Let of recursive * variable * term * term
+  | IfZero of term * term * term
 
 (* Every abstract syntax tree node of type [term] is annotated with a place,
    that is, a position in the source code. This allows us to produce a good

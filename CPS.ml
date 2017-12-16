@@ -38,6 +38,10 @@ let rec cps (t : S.term) (k : T.value) : T.term =
       (cps t)
   | S.Let (x, t1, t2) ->
     lambda_let (T.Lam (T.NoSelf, [x], cps t2 k)) (cps t1)
+  | S.IfZero (t1, t2, t3) ->
+    let cond = Atom.fresh "cps_if" in
+    lambda_let (T.Lam (T.NoSelf, [cond],
+                       T.IfZero (T.vvar cond, cps t2 k, cps t3 k))) (cps t1)
 
 let cps_term (t : S.term) : T.term =
   lambda_let (T.Lam (T.NoSelf, [Atom.fresh "cps_result"], T.Exit)) (cps t)

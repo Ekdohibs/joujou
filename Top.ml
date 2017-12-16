@@ -40,6 +40,7 @@ and term =
   | Print of value * term
   | LetVal of variable * value * term
   | LetBlo of variable * block * term
+  | IfZero of value * term * term
   | Swi of value * branch list
 
 (* A branch [tag xs -> t] is labeled with an integer tag [tag], and is

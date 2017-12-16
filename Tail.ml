@@ -73,6 +73,7 @@ and term =
   | Print of value * term
   | LetVal of variable * value * term
   | LetBlo of variable * block * term
+  | IfZero of value * term * term
 
 [@@deriving show { with_path = false }]
 
@@ -130,6 +131,8 @@ and fv_term (t : term) =
       union
         (fv_block b1)
         (remove x (fv_term t2))
+  | IfZero (v1, t2, t3) ->
+    union (fv_value v1) (union (fv_term t2) (fv_term t3))
 
 let rec rename_value (r : Atom.atom Atom.Map.t) (v : value) =
   match v with
@@ -166,6 +169,8 @@ and rename_term (r : Atom.atom Atom.Map.t) (t : term) =
   | LetBlo (x, b1, t2) ->
     assert (not (Atom.Map.mem x r));
     LetBlo (x, rename_block r b1, rename_term r t2)
+  | IfZero (v1, t2, t3) ->
+    IfZero (rename_value r v1, rename_term r t2, rename_term r t3)
 
 
 (* [let x_1 = v_1 in ... let x_n = v_n in t] *)

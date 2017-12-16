@@ -207,33 +207,35 @@ let scall f args : T.stmt =
 let rec finish_term (t : S.term) : C.stmt =
   match t with
   | S.Exit ->
-      T.Compound [
-        scall exit [ iconst 0 ]
-      ]
+    T.Compound [
+      scall exit [ iconst 0 ]
+    ]
   | S.TailCall (f, vs) ->
-      T.Return (Some (ecall (evar f) (finish_values vs)))
+    T.Return (Some (ecall (evar f) (finish_values vs)))
   | S.Print (v, t) ->
-      T.Compound [
-        scall printf [ T.Literal "%d\\n"; to_int (finish_value v) ];
-        finish_term t
-      ]
+    T.Compound [
+      scall printf [ T.Literal "%d\\n"; to_int (finish_value v) ];
+      finish_term t
+    ]
   | S.LetVal (x, v1, t2) ->
-      T.Compound [
-        T.DeclStmt (declare x (Some (T.InitExpr (finish_value v1))));
-        finish_term t2
-      ]
+    T.Compound [
+      T.DeclStmt (declare x (Some (T.InitExpr (finish_value v1))));
+      finish_term t2
+    ]
   | S.LetBlo (x, b1, t2) ->
-      T.Compound (
-        T.DeclStmt (declare x (Some (T.InitExpr (alloc b1)))) ::
-        init_block x b1 @
-        [ finish_term t2 ]
-      )
+    T.Compound (
+      T.DeclStmt (declare x (Some (T.InitExpr (alloc b1)))) ::
+      init_block x b1 @
+      [ finish_term t2 ]
+    )
   | S.Swi (v, bs) ->
-      T.Switch (
-        read_tag v,
-        finish_branches v bs,
-        default
-      )
+    T.Switch (
+      read_tag v,
+      finish_branches v bs,
+      default
+    )
+  | S.IfZero (v, t1, t2) ->
+    T.IfElse (to_int (finish_value v), finish_term t2, finish_term t1)
 
 and default : T.stmt =
   (* This default [switch] branch should never be taken. *)
