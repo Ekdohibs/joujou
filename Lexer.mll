@@ -5,6 +5,20 @@ open Error
 open Parser
 open RawLambda
 
+let kw = [
+  "else", ELSE ;
+  "fun", FUN ;
+  "ifzero", IFZERO ;
+  "in", IN ;
+  "let", LET ;
+  "print", PRINT ;
+  "rec", REC ;
+  "then", THEN ;
+]
+
+let keywords = Hashtbl.create (List.length kw)
+let () = List.iter (fun (a,b) -> Hashtbl.add keywords a b) kw
+
 }
 
 (* -------------------------------------------------------------------------- *)
@@ -34,16 +48,6 @@ let digit =
 (* The lexer. *)
 
 rule entry = parse
-| "fun"
-    { FUN }
-| "in"
-    { IN }
-| "let"
-    { LET }
-| "print"
-    { PRINT }
-| "rec"
-    { REC }
 | "->"
     { ARROW }
 | "="
@@ -61,7 +65,7 @@ rule entry = parse
 | "/"
     { MULOP OpDiv }
 | (lowercase identchar *) as x
-    { IDENT x }
+    { try Hashtbl.find keywords x with Not_found -> IDENT x }
 | digit+ as i
     { try
         INTLITERAL (int_of_string i)
