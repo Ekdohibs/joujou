@@ -12,14 +12,14 @@ let rec cps (t : S.term) (k : T.value) : T.term =
   | S.Var v -> T.TailCall (k, [T.vvar v])
   | S.Lam (self, var, body) ->
     let cont = Atom.fresh "cps_cont" in
-    lambda_let (T.Lam (self, [var; cont], cps body (T.vvar cont)))
+    lambda_let (T.Lam (self, [cont; var], cps body (T.vvar cont)))
       (fun f -> T.TailCall (k, [f]))
   | S.App (t1, t2) ->
     let appl = Atom.fresh "cps_appl" in
     let appr = Atom.fresh "cps_appr" in
     let w =
       lambda_let (T.Lam (T.NoSelf, [appr],
-                         T.TailCall (T.vvar appl, [T.vvar appr; k])))
+                         T.TailCall (T.vvar appl, [k; T.vvar appr])))
         (cps t2) in
     lambda_let (T.Lam (T.NoSelf, [appl], w)) (cps t1)
   | S.Lit n -> T.TailCall (k, [T.VLit n])
