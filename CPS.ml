@@ -19,7 +19,7 @@ let rec cps (t : S.term) (k : T.value) : T.term =
     let appr = Atom.fresh "cps_appr" in
     let w =
       lambda_let (T.Lam (T.NoSelf, [appr],
-                         T.TailCall (T.vvar appl, [k; T.vvar appr])))
+                         T.ContCall (T.vvar appl, k, [T.vvar appr])))
         (cps t2) in
     lambda_let (T.Lam (T.NoSelf, [appl], w)) (cps t1)
   | S.Lit n -> T.TailCall (k, [T.VLit n])

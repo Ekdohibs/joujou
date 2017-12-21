@@ -59,6 +59,9 @@ let rec defun (t : S.term) (st : defun_state) : T.term =
     let arity = List.length args in
     let app, _, _ = get_apply_def st arity in
     defun_values st (fun args -> T.TailCall (app, args)) (f :: args)
+  | S.ContCall (f, k, args) ->
+    let arity = List.length args in
+    defun (S.TailCall (f, (k :: args))) st
   | S.Print (v, t) -> defun_value st (fun v -> T.Print (v, defun t st)) v
   | S.LetVal (x, v, t) ->
     defun_value st (fun v -> T.LetVal (x, v, defun t st)) v

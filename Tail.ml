@@ -55,8 +55,12 @@ and block =
    - The primitive operation [Exit] stops the program.
 
    - The tail call [TailCall (v, vs)] transfers control to the function [v]
-     with actual arguments [vs]. (The value [v] should be a function and its
+     with actual arguments [vs]. (The value [v] should be a function, and its
      arity should be the length of [vs].)
+
+   - The continuation call [ContCall (v, k, vs)] transfers control to the
+     function [v], with actual arguments [vs], and continuation to apply [k].
+     (The values [v] and [k] should be functions, [k] having arity exactly 1.)
 
    - The term [Print (v, t)] prints the value [v], then executes the term [t].
      (The value [v] should be a primitive integer value.)
@@ -65,11 +69,27 @@ and block =
      executes the term [t].
 
    - The term [LetBlo (x, b, t)] allocates the memory block [b] and binds the
-     variable [x] to its address, then executes the term [t]. *)
+     variable [x] to its address, then executes the term [t].
+
+
+   The semantics of [ContCall (f, k, [x1; ...; xn])] are defined as follows:
+
+   - [ContCall (f, k, [x1; ...; xn]) -> TailCall (f, [k; x1; ...; xn])] if
+     f has arity n + 1.
+
+   - [ContCall (f, k, [x1; ...; xn]) ->
+       TailCall (k, (fun k2 x_{n+1} ... xm -> ContCall (f, k2, [x1; ...; xm])))]
+     if f has arity m + 1 > n + 1.
+
+   - [ContCall (f, k, [x1; ...; xn]) ->
+       TailCall (f, [(fun g -> ContCall (g, k, [x_{m+1}; ...; xn])); x1; ...; xm])]
+     if f has arity m + 1 < n + 1.
+*)
 
 and term =
   | Exit
   | TailCall of value * value list
+  | ContCall of value * value * value list
   | Print of value * term
   | LetVal of variable * value * term
   | LetBlo of variable * block * term
@@ -118,19 +138,21 @@ and fv_block (b : block) =
 and fv_term (t : term) =
   match t with
   | Exit ->
-      empty
+    empty
   | TailCall (v, vs) ->
-      fv_values (v :: vs)
+    fv_values (v :: vs)
+  | ContCall (v, k, vs) ->
+    fv_values (v :: k :: vs)
   | Print (v1, t2) ->
-      union (fv_value v1) (fv_term t2)
+    union (fv_value v1) (fv_term t2)
   | LetVal (x, v1, t2) ->
-      union
-        (fv_value v1)
-        (remove x (fv_term t2))
+    union
+      (fv_value v1)
+      (remove x (fv_term t2))
   | LetBlo (x, b1, t2) ->
-      union
-        (fv_block b1)
-        (remove x (fv_term t2))
+    union
+      (fv_block b1)
+      (remove x (fv_term t2))
   | IfZero (v1, t2, t3) ->
     union (fv_value v1) (union (fv_term t2) (fv_term t3))
 
@@ -161,6 +183,8 @@ and rename_term (r : Atom.atom Atom.Map.t) (t : term) =
   | Exit -> Exit
   | TailCall (v, vs) ->
     TailCall (rename_value r v, rename_values r vs)
+  | ContCall (v, k, vs) ->
+    ContCall (rename_value r v, rename_value r k, rename_values r vs)
   | Print (v1, t2) ->
     Print (rename_value r v1, rename_term r t2)
   | LetVal (x, v1, t2) ->
@@ -195,7 +219,7 @@ let parallel_let (xs : variable list) (vs : value list) (t : term) =
 
 let rec simpl (t : term) : term =
   match t with
-  | Exit | TailCall _ | Print _ -> t
+  | Exit | TailCall _ | ContCall _ | Print _ -> t
   | LetVal (x, VVar v, t) ->
     rename_term (Atom.Map.singleton x v) (simpl t)
   | LetVal (x, v, t) -> LetVal (x, v, simpl t)
