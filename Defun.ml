@@ -10,8 +10,9 @@ let gen_id =
 
 type defun_state = {
   mutable toplevel_functions : (Atom.atom * int) Atom.Map.t ;
-  mutable extracted_functions : T.function_declaration list ;
-  mutable apply_defs : (Atom.atom * Atom.atom list * T.branch list) IMap.t ;
+  mutable extracted_functions : (T.function_declaration * int * Atom.atom list * int) list ;
+  mutable apply_defs : (Atom.atom * Atom.atom list) IMap.t ;
+  mutable cont_defs : (Atom.atom * Atom.atom list) IMap.t ;
 }
 
 let ( <|> ) a b =
@@ -26,8 +27,20 @@ let get_apply_def (st : defun_state) (arity : int) =
   with Not_found ->
     let v = Atom.fresh ("defun_apply_" ^ (string_of_int arity) ^ "_") in
     let args = List.map (fun _ -> Atom.fresh "defun_apply_var") (0 <|> arity) in
-    st.apply_defs <- IMap.add arity (v, args, []) st.apply_defs;
-    (v, args, [])
+    st.apply_defs <- IMap.add arity (v, args) st.apply_defs;
+    (v, args)
+
+let get_cont_def (st : defun_state) (arity : int) =
+  try
+    IMap.find arity st.cont_defs
+  with Not_found ->
+    let v = Atom.fresh ("defun_cont_" ^ (string_of_int arity) ^ "_") in
+    let args =
+      Atom.fresh "defun_cont_f" ::
+      List.map (fun _ -> Atom.fresh "defun_cont_var") (0 <|> arity) in
+    st.cont_defs <- IMap.add arity (v, args) st.cont_defs;
+    (v, args)
+
 
 let rec defun_value (st : defun_state) (k : T.value -> T.term) (t : S.value) : T.term =
   match t with
@@ -57,7 +70,7 @@ let rec defun (t : S.term) (st : defun_state) : T.term =
         T.TailCall (fst (Atom.Map.find f st.toplevel_functions), args)) args
   | S.TailCall (f, args) ->
     let arity = List.length args in
-    let app, _, _ = get_apply_def st arity in
+    let app, _ = get_apply_def st arity in
     defun_values st (fun args -> T.TailCall (app, args)) (f :: args)
   | S.ContCall (f, k, args) ->
     let arity = List.length args in
@@ -87,12 +100,7 @@ let rec defun (t : S.term) (st : defun_state) : T.term =
       | S.NoSelf -> nbody
       | S.Self f -> T.LetBlo (f, T.Con (tag, T.vvars fv1), nbody)
     in
-    let fdef = T.Fun (fname, args @ fv1, nbody) in
-    let arity = List.length args in
-    let app, aargs, branches = get_apply_def st arity in
-    let fv2 = List.map Atom.copy fv in
-    let branch = T.Branch (tag, fv2, T.TailCall (fname, T.vvars (aargs @ fv2))) in
-    st.apply_defs <- IMap.add arity (app, aargs, branch :: branches) st.apply_defs;
+    let fdef = (T.Fun (fname, args @ fv1, nbody), tag, fv1, List.length args) in
     let nt = defun t st in
     st.extracted_functions <- fdef :: st.extracted_functions;
     T.LetBlo (f, T.Con (tag, T.vvars fv), nt)
@@ -104,10 +112,19 @@ let defun_term (t : S.term) : T.program =
     toplevel_functions = Atom.Map.empty ;
     extracted_functions = [] ;
     apply_defs = IMap.empty ;
+    cont_defs = IMap.empty ;
   } in
   let nt = defun t st in
-  let applies = List.map (fun (_, (name, args, branches)) ->
+  let branches = List.fold_left (fun br (T.Fun (name, _, _), tag, fv, arity) ->
+      let fv2 = List.map Atom.copy fv in
+      let _, aargs = get_apply_def st arity in
+      IMap.add arity (
+        T.Branch (tag, fv2, T.TailCall (name, T.vvars (aargs @ fv2))) ::
+          (try IMap.find arity br with Not_found -> [])
+      ) br
+    ) IMap.empty st.extracted_functions in
+  let applies = List.map (fun (arity, (name, args)) ->
       let f = Atom.fresh "apply_f" in
-      T.Fun (name, f :: args, T.Swi (T.vvar f, branches))
+      T.Fun (name, f :: args, T.Swi (T.vvar f, IMap.find arity branches))
     ) (IMap.bindings st.apply_defs) in
-  T.Prog (applies @ st.extracted_functions, nt)
+  T.Prog (applies @ (List.map (fun (f, _, _, _) -> f) st.extracted_functions), nt)
