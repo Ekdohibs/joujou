@@ -1,0 +1,3 @@
+let double = fun f -> fun x -> f (f x) in
+let succ = fun x -> x + 1 in
+print (double double double succ 0)

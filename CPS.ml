@@ -12,16 +12,11 @@ let rec cps (t : S.term) (k : T.value) : T.term =
   | S.Var v -> T.TailCall (k, [T.vvar v])
   | S.Lam (self, var, body) ->
     let cont = Atom.fresh "cps_cont" in
-    lambda_let (T.Lam (self, [cont; var], cps body (T.vvar cont)))
+    let args, body1 = cps_lam body [var] in
+    lambda_let (T.Lam (self, List.rev (cont :: args), cps body1 (T.vvar cont)))
       (fun f -> T.TailCall (k, [f]))
   | S.App (t1, t2) ->
-    let appl = Atom.fresh "cps_appl" in
-    let appr = Atom.fresh "cps_appr" in
-    let w =
-      lambda_let (T.Lam (T.NoSelf, [appr],
-                         T.ContCall (T.vvar appl, k, [T.vvar appr])))
-        (cps t2) in
-    lambda_let (T.Lam (T.NoSelf, [appl], w)) (cps t1)
+    cps_app t k []
   | S.Lit n -> T.TailCall (k, [T.VLit n])
   | S.BinOp (t1, op, t2) ->
     let bl = Atom.fresh "cps_bl" in
@@ -42,6 +37,24 @@ let rec cps (t : S.term) (k : T.value) : T.term =
     let cond = Atom.fresh "cps_if" in
     lambda_let (T.Lam (T.NoSelf, [cond],
                        T.IfZero (T.vvar cond, cps t2 k, cps t3 k))) (cps t1)
+
+and cps_app (t : S.term) (k : T.value) (args : T.value list) : T.term =
+  match t with
+  | S.App (t1, t2) ->
+    let appr = Atom.fresh "cps_appr" in
+    lambda_let (T.Lam (T.NoSelf, [appr],
+      cps_app t1 k (T.vvar appr :: args)
+                      )) (cps t2)
+  | _ ->
+    let appl = Atom.fresh "cps_appl" in
+    lambda_let (T.Lam (T.NoSelf, [appl],
+      T.ContCall (T.vvar appl, k, args))) (cps t)
+
+and cps_lam (t : S.term) (args : T.variable list) : T.variable list * S.term =
+  match t with
+  | S.Lam (T.NoSelf, var, body) ->
+    cps_lam body (var :: args)
+  | _ -> (args, t)
 
 let cps_term (t : S.term) : T.term =
   lambda_let (T.Lam (T.NoSelf, [Atom.fresh "cps_result"], T.Exit)) (cps t)

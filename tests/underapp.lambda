@@ -1,0 +1,4 @@
+let f = fun x -> fun y -> x + y in
+let u = f 2 in
+let _ = print (u 3) in
+print (u 40)

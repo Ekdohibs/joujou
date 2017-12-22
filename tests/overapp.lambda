@@ -1,0 +1,2 @@
+let id = fun x -> x in
+print (id id 42)

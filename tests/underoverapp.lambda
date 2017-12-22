@@ -1,0 +1,5 @@
+let f1 = fun x -> fun y -> x * y in
+let id = fun x -> x in
+let _ = print (id (f1 6) 7) in
+let z = id f1 7 in
+print (z 6)
