@@ -74,15 +74,15 @@ and block =
 
    The semantics of [ContCall (f, k, [x1; ...; xn])] are defined as follows:
 
-   - [ContCall (f, k, [x1; ...; xn]) -> TailCall (f, [k; x1; ...; xn])] if
+   - [ContCall (f, k, [x1; ...; xn]) -> TailCall (f, [x1; ...; xn; k])] if
      f has arity n + 1.
 
    - [ContCall (f, k, [x1; ...; xn]) ->
-       TailCall (k, (fun k2 x_{n+1} ... xm -> ContCall (f, k2, [x1; ...; xm])))]
+       TailCall (k, (fun x_{n+1} ... xm k2 -> ContCall (f, k2, [x1; ...; xm])))]
      if f has arity m + 1 > n + 1.
 
    - [ContCall (f, k, [x1; ...; xn]) ->
-       TailCall (f, [(fun g -> ContCall (g, k, [x_{m+1}; ...; xn])); x1; ...; xm])]
+       TailCall (f, [x1; ...; xm; (fun g -> ContCall (g, k, [x_{m+1}; ...; xn]))])]
      if f has arity m + 1 < n + 1.
 *)
 
