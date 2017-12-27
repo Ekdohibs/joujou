@@ -2,6 +2,8 @@
 
 type variable =
   string
+and constructor =
+  string
 
 (* Every [let] binding is marked recursive or nonrecursive. *)
 
@@ -32,6 +34,7 @@ and term_ =
   | Let of recursive * variable * term * term
   | IfZero of term * term * term
   | CallCc of term
+  | Match of term * (pattern * term) list
 
 (* Every abstract syntax tree node of type [term] is annotated with a place,
    that is, a position in the source code. This allows us to produce a good
@@ -39,6 +42,15 @@ and term_ =
 
 and term =
   term_ placed
+
+and pattern_ =
+  | PVar of variable
+  | PConstructor of constructor * pattern option
+  | POr of pattern * pattern
+  | PTuple of pattern list
+
+and pattern =
+  pattern_ placed
 
 (* A value of type ['a placed] can be thought of as a value of type ['a]
    decorated with a place. *)

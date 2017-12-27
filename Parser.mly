@@ -1,13 +1,20 @@
 %token<string> IDENT
+%token<string> UIDENT
 %token<int> INTLITERAL
 %token FUN IN LET PRINT REC CALLCC
 %token IFZERO THEN ELSE
-%token ARROW EQ LPAREN RPAREN
+%token ARROW EQ LPAREN RPAREN BAR COMMA
+%token TYPE OF
+%token MATCH WITH
 %token<RawLambda.binop> MULOP ADDOP
 %token EOF
 
-%nonassoc ARROW IN
-%nonassoc IFZERO
+%nonassoc IN
+%nonassoc WITH
+%left BAR
+(* %left COMMA *)
+%right ARROW
+(* %nonassoc IFZERO *)
 %nonassoc ELSE
 %left ADDOP
 %left MULOP
@@ -72,36 +79,32 @@ any_term_:
     { Let (mode, x, t1, t2) }
 | IFZERO t1 = any_term THEN t2 = any_term ELSE t3 = any_term
     { IfZero (t1, t2, t3) }
+| MATCH t1 = any_term WITH cases = left_flexible_list(BAR, match_case)
+    { Match (t1, cases) }
 
 %inline any_term:
-  t = placed(any_term_)
-    { t }
+| t = placed(any_term_) { t }
 
-(* -------------------------------------------------------------------------- *)
+match_case:
+| p = pattern ARROW t = any_term { (p, t) }
 
-(* An infix-left-associative-operator level in a hierarchy of arithmetic
-   expressions. *)
+%inline pattern:
+| p = placed(pattern_) { p }
 
-(* [basis] is the next lower level in the hierarchy.
-   [op] is the category of binary operators.
-   [action] is a ternary sequencing construct. *)
+pattern_:
+| p1 = pattern BAR p2 = pattern { POr (p1, p2) }
+| p = simple_pattern COMMA l = separated_list(COMMA, simple_pattern)
+    { PTuple (p :: l) }
+| p = simple_pattern_ { p }
 
-left_associative_level(basis, op, action):
-| t = basis
-| t = action(
-        left_associative_level(basis, op, action),
-        op,
-        basis
-      )
-    { t }
+%inline simple_pattern:
+| p = placed(simple_pattern_) { p }
 
-(* -------------------------------------------------------------------------- *)
-
-(* A ternary sequence whose semantic action builds a [BinOp] node. *)
-
-%inline mkbinop(term1, op, term2):
-  t1 = placed(term1) op = op t2 = placed(term2)
-    { BinOp (t1, op, t2) }
+simple_pattern_:
+| LPAREN p = pattern_ RPAREN { p }
+| x = IDENT { PVar x }
+| x = UIDENT { PConstructor (x, None) }
+| x = UIDENT p = simple_pattern { PConstructor (x, Some p) }
 
 (* -------------------------------------------------------------------------- *)
 

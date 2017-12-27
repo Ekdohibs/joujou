@@ -12,9 +12,13 @@ let kw = [
   "ifzero", IFZERO ;
   "in", IN ;
   "let", LET ;
+  "match", MATCH ;
+  "of", OF ;
   "print", PRINT ;
   "rec", REC ;
   "then", THEN ;
+  "type", TYPE ;
+  "with", WITH ;
 ]
 
 let keywords = Hashtbl.create (List.length kw)
@@ -65,8 +69,14 @@ rule entry = parse
     { MULOP OpMul }
 | "/"
     { MULOP OpDiv }
+| "|"
+    { BAR }
+| ","
+    { COMMA }
 | (lowercase identchar *) as x
     { try Hashtbl.find keywords x with Not_found -> IDENT x }
+| (uppercase identchar *) as x
+    { UIDENT x }
 | digit+ as i
     { try
         INTLITERAL (int_of_string i)
