@@ -1,0 +1,3 @@
+let yin = (fun cc -> let _ = print 1 in cc) (callcc (fun c -> c)) in
+let yang = (fun cc -> let _ = print 0 in cc) (callcc (fun c -> c)) in
+yin yang

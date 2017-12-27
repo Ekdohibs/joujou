@@ -45,5 +45,6 @@ and term =
   | Print of term
   | Let of variable * term * term
   | IfZero of term * term * term
+  | CallCc of term
 
 [@@deriving show { with_path = false }]

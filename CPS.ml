@@ -7,6 +7,18 @@ let lambda_let (lam : T.block) (body : T.value -> T.term) : T.term =
   let f = Atom.fresh "cps_lambda_let" in
   T.LetBlo (f, lam, body (T.vvar f))
 
+let continuation_to_fct (t : T.value) (body : T.value -> T.term) : T.term =
+  let k = Atom.fresh "cps_cont" in
+  let cnt = Atom.fresh "cps_cnt" in
+  lambda_let (T.Lam (T.NoSelf, [k; cnt], T.TailCall (t, [T.vvar k]))) body
+
+let fct_to_continuation (t : T.value) (body : T.value -> T.term) : T.term =
+  let cont_arg = Atom.fresh "cps_cont_arg" in
+  let ex_arg = Atom.fresh "cps_ex_arg" in
+  lambda_let (T.Lam (T.NoSelf, [cont_arg],
+    lambda_let (T.Lam (T.NoSelf, [ex_arg], T.Exit)) (fun ex ->
+      T.ContCall (t, ex, [T.vvar cont_arg])))) body
+
 let rec cps (t : S.term) (k : T.value) : T.term =
   match t with
   | S.Var v -> T.TailCall (k, [T.vvar v])
@@ -31,6 +43,12 @@ let rec cps (t : S.term) (k : T.value) : T.term =
     lambda_let (T.Lam (T.NoSelf, [pr],
                        T.Print (T.vvar pr, T.TailCall (k, [T.vvar pr]))))
       (cps t)
+  | S.CallCc t ->
+    let f = Atom.fresh "cps_callcc" in
+    lambda_let (T.Lam (T.NoSelf, [f],
+      continuation_to_fct k (fun kf ->
+        T.ContCall (T.vvar f, k, [kf]))
+    )) (cps t)
   | S.Let (x, t1, t2) ->
     lambda_let (T.Lam (T.NoSelf, [x], cps t2 k)) (cps t1)
   | S.IfZero (t1, t2, t3) ->
