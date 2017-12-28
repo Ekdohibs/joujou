@@ -12,4 +12,8 @@
 (* This also involves dropping places (that is, source code locations), since
    they are no longer used after this phase. *)
 
-val cook_term: RawLambda.term -> Lambda.term
+(* Moreover, this modules typechecks definitions as well, and will only
+   accept well-typed programs, if disable_type_checking is not set to true. *)
+
+val cook_program: RawLambda.program -> Lambda.term
+val disable_type_checking : bool ref

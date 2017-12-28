@@ -14,7 +14,11 @@ let record filename =
 let options =
   Arg.align [
     "--debug", Arg.Set debug, " Enable debugging output";
+    "--disable-type-checking", Arg.Set Cook.disable_type_checking, " Disable type checking";
   ]
+
+let () = Lexer.add_pragma "disable_type_checking"
+    (fun () -> Cook.disable_type_checking := true)
 
 let usage =
   Printf.sprintf "Usage: %s <options> <filename>" Sys.argv.(0)
@@ -47,7 +51,7 @@ let dump (phase : string) (show : 'term -> string) (t : 'term) =
 
 (* Reading and parsing a file. *)
 
-let read filename : RawLambda.term =
+let read filename : RawLambda.program =
   try
     let contents = Utils.file_get_contents filename in
     let lexbuf = Lexing.from_string contents in
@@ -82,8 +86,8 @@ let output (p : C.program) : unit =
 let process filename =
   filename
   |> read
-  |> dump "RawLambda" RawLambda.show_term
-  |> Cook.cook_term
+  |> dump "RawLambda" RawLambda.show_program
+  |> Cook.cook_program
   |> dump "Lambda" Lambda.show_term
   |> CPS.cps_term
   |> dump "Tail - 1" Tail.show_term

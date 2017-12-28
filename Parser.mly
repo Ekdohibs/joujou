@@ -3,7 +3,7 @@
 %token<int> INTLITERAL
 %token FUN IN LET PRINT REC CALLCC
 %token IFZERO THEN ELSE
-%token ARROW EQ LPAREN RPAREN BAR COMMA
+%token ARROW EQ LPAREN RPAREN BAR COMMA STAR SEMISEMI
 %token TYPE OF
 %token MATCH WITH
 %token<RawLambda.binop> MULOP ADDOP
@@ -17,9 +17,11 @@
 (* %nonassoc IFZERO *)
 %nonassoc ELSE
 %left ADDOP
-%left MULOP
+%left MULOP STAR
+(* First tokens of atomic_term *)
+(* %nonassoc LPAREN IDENT INTLITERAL *)
 
-%start<RawLambda.term> entry
+%start<RawLambda.program> entry
 
 %{
 
@@ -34,8 +36,16 @@ open RawLambda
 (* A toplevel phrase is just a term. *)
 
 entry:
-  t = any_term EOF
-    { t }
+  p = program EOF { p }
+
+program:
+| t = any_term p = program_tail { { value = DTerm t ; place = t.place } :: p }
+| p = program_tail { p }
+
+program_tail:
+| { [] }
+| SEMISEMI p = program { p }
+| d = decl p = program_tail { d :: p }
 
 (* -------------------------------------------------------------------------- *)
 
@@ -45,12 +55,42 @@ entry:
    application_term        -- n-ary applications of atomic terms
    any_term                -- everything
 
-   A [match/with/end] construct is terminated with an [end] keyword, as in Coq,
-   so it is an atomic term. *)
+*)
+
+%inline decl:
+| d = placed(decl_) { d }
+
+decl_:
+| LET mode = recursive x = IDENT EQ t = any_term
+    { DLet (mode, x, t) }
+| TYPE x = IDENT EQ l = left_flexible_list(BAR, placed(type_decl_case_))
+    { DNewType (x, l) }
+| TYPE x = IDENT EQ t = ty
+    { DTypeSynonym (x, t) }
+
+type_decl_case_:
+| c = UIDENT { (c, []) }
+| c = UIDENT OF l = separated_list(STAR, simple_type) { (c, l) }
+
+%inline simple_type:
+| t = placed(simple_type_) { t }
+
+%inline ty:
+| t = placed(ty_) { t }
+
+ty_:
+| t = simple_type_ { t }
+| t = simple_type STAR l = separated_nonempty_list(STAR, simple_type)
+  { TTuple (t :: l) }
+| t1 = ty ARROW t2 = ty { TArrow (t1, t2) }
+
+simple_type_:
+| LPAREN t = ty_ RPAREN { t }
+| x = IDENT { TVar x }
 
 atomic_term_:
-| LPAREN t = any_term RPAREN
-    { t.value }
+| LPAREN t = any_term_ RPAREN
+    { t }
 | x = IDENT
     { Var x }
 | i = INTLITERAL
@@ -68,6 +108,7 @@ application_term_:
 
 %inline binop:
 | op = MULOP { op }
+| STAR { OpMul }
 | op = ADDOP { op }
 
 any_term_:
@@ -93,7 +134,7 @@ match_case:
 
 pattern_:
 | p1 = pattern BAR p2 = pattern { POr (p1, p2) }
-| p = simple_pattern COMMA l = separated_list(COMMA, simple_pattern)
+| p = simple_pattern COMMA l = separated_nonempty_list(COMMA, simple_pattern)
     { PTuple (p :: l) }
 | p = simple_pattern_ { p }
 

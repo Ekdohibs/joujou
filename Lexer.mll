@@ -24,6 +24,17 @@ let kw = [
 let keywords = Hashtbl.create (List.length kw)
 let () = List.iter (fun (a,b) -> Hashtbl.add keywords a b) kw
 
+let pragmas = Hashtbl.create 17
+
+let add_pragma = Hashtbl.add pragmas
+
+let run_pragma x place =
+  let f =
+    try Hashtbl.find pragmas x
+    with Not_found -> error place "Unknown pragma declaration: %s" x
+  in
+  f ()
+
 }
 
 (* -------------------------------------------------------------------------- *)
@@ -53,6 +64,18 @@ let digit =
 (* The lexer. *)
 
 rule entry = parse
+| "#pragma" whitespace+ ((identchar | '-')+ as x) whitespace* newline
+    { run_pragma x (place lexbuf); new_line lexbuf; entry lexbuf }
+| newline
+    { new_line lexbuf; entry lexbuf }
+| whitespace+
+    { entry lexbuf }
+| "(*"
+    { ocamlcomment (place lexbuf) lexbuf; entry lexbuf }
+| ""
+    { token lexbuf }
+
+and token = parse
 | "->"
     { ARROW }
 | "="
@@ -66,13 +89,15 @@ rule entry = parse
 | "-"
     { ADDOP OpSub }
 | "*"
-    { MULOP OpMul }
+    { STAR }
 | "/"
     { MULOP OpDiv }
 | "|"
     { BAR }
 | ","
     { COMMA }
+| ";;"
+    { SEMISEMI }
 | (lowercase identchar *) as x
     { try Hashtbl.find keywords x with Not_found -> IDENT x }
 | (uppercase identchar *) as x
@@ -83,11 +108,11 @@ rule entry = parse
       with Failure _ ->
         error (place lexbuf) "invalid integer literal." }
 | "(*"
-    { ocamlcomment (place lexbuf) lexbuf; entry lexbuf }
+    { ocamlcomment (place lexbuf) lexbuf; token lexbuf }
 | newline
-    { new_line lexbuf; entry lexbuf }
+    { new_line lexbuf; token lexbuf }
 | whitespace+
-    { entry lexbuf }
+    { token lexbuf }
 | eof
     { EOF }
 | _ as c

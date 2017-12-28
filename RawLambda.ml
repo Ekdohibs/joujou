@@ -52,6 +52,26 @@ and pattern_ =
 and pattern =
   pattern_ placed
 
+and ty_ =
+  | TVar of variable
+  | TTuple of ty list
+  | TArrow of ty * ty
+
+and ty =
+  ty_ placed
+
+and decl_ =
+  | DLet of recursive * variable * term
+  | DNewType of variable * (constructor * ty list) placed list
+  | DTypeSynonym of variable * ty
+  | DTerm of term
+
+and decl =
+  decl_ placed
+
+and program =
+  decl list
+
 (* A value of type ['a placed] can be thought of as a value of type ['a]
    decorated with a place. *)
 

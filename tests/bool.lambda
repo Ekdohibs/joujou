@@ -1,3 +1,4 @@
+#pragma disable_type_checking
 (* Thunks. *)
 let force = fun x -> x 0 in
 (* Church Booleans. *)
