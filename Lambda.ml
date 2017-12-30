@@ -12,13 +12,19 @@
 
    2. Variables are represented by atoms (instead of strings). A term with an
       unbound variable is rejected during the translation of [RawLambda] to
-      [Lambda].
+      [Lambda]. The same is done for types and constructors.
 
    3. Terms are no longer annotated with places. *)
 
 (* Variables are atoms. *)
 
 type variable =
+  Atom.atom
+
+and tname =
+  Atom.atom
+
+and constructor =
   Atom.atom
 
  (* Every lambda-abstraction is marked recursive or nonrecursive. Whereas a
@@ -46,9 +52,11 @@ and term =
   | Let of variable * term * term
   | IfZero of term * term * term
   | CallCc of term
+  | Tuple of term list
+  | Constructor of constructor * term list
 
 and typ =
-  | Tint
+  | Tident of tname
   | Tarrow of typ * typ
   | Tproduct of typ list
   | Tvar of tvar
@@ -79,7 +87,7 @@ module Ty = struct
 
   let rec canon t =
     match t with
-    | Tint -> t
+    | Tident _ -> t
     | Tarrow (ta, tb) -> Tarrow (canon ta, canon tb)
     | Tproduct l -> Tproduct (List.map canon l)
     | Tvar {def = None ; _} -> t
@@ -87,7 +95,7 @@ module Ty = struct
 
   let rec fvars t =
     match (head t) with
-    | Tint -> TVSet.empty
+    | Tident _ -> TVSet.empty
     | Tarrow (ta, tb) -> TVSet.union (fvars ta) (fvars tb)
     | Tproduct l ->
       List.fold_left TVSet.union TVSet.empty (List.map fvars l)
@@ -95,7 +103,7 @@ module Ty = struct
 
   let rec subst sigma t =
     match (head t) with
-    | Tint -> Tint
+    | Tident n -> Tident n
     | Tarrow (t1, t2) -> Tarrow (subst sigma t1, subst sigma t2)
     | Tproduct l -> Tproduct (List.map (subst sigma) l)
     | Tvar tv -> sigma tv

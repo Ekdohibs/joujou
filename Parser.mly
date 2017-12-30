@@ -18,8 +18,9 @@
 %nonassoc ELSE
 %left ADDOP
 %left MULOP STAR
+%nonassoc prec_constant_constructor
 (* First tokens of atomic_term *)
-(* %nonassoc LPAREN IDENT INTLITERAL *)
+%nonassoc LPAREN UIDENT IDENT INTLITERAL
 
 %start<RawLambda.program> entry
 
@@ -95,16 +96,26 @@ atomic_term_:
     { Var x }
 | i = INTLITERAL
     { Lit i }
+| x = UIDENT %prec prec_constant_constructor
+    { Constructor (x, None) }
+
+%inline atomic_term:
+| t = placed(atomic_term_) { t }
 
 application_term_:
 | t = atomic_term_
     { t }
-| t1 = placed(application_term_) t2 = placed(atomic_term_)
+| t1 = application_term t2 = atomic_term
     { App (t1, t2) }
-| PRINT t2 = placed(atomic_term_)
+| PRINT t2 = atomic_term
     { Print t2 }
-| CALLCC t2 = placed(atomic_term_)
+| CALLCC t2 = atomic_term
     { CallCc t2 }
+| x = UIDENT t2 = application_term
+    { Constructor (x, Some t2) }
+
+%inline application_term:
+| t = placed(application_term_) { t }
 
 %inline binop:
 | op = MULOP { op }
@@ -122,6 +133,8 @@ any_term_:
     { IfZero (t1, t2, t3) }
 | MATCH t1 = any_term WITH cases = left_flexible_list(BAR, match_case)
     { Match (t1, cases) }
+| t = application_term COMMA l = separated_nonempty_list(COMMA, application_term)
+    { Tuple (t :: l) }
 
 %inline any_term:
 | t = placed(any_term_) { t }
@@ -144,8 +157,7 @@ pattern_:
 simple_pattern_:
 | LPAREN p = pattern_ RPAREN { p }
 | x = IDENT { PVar x }
-| x = UIDENT { PConstructor (x, None) }
-| x = UIDENT p = simple_pattern { PConstructor (x, Some p) }
+| x = UIDENT p = ioption(simple_pattern) { PConstructor (x, p) }
 
 (* -------------------------------------------------------------------------- *)
 

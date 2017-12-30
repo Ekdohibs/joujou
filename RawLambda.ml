@@ -35,6 +35,8 @@ and term_ =
   | IfZero of term * term * term
   | CallCc of term
   | Match of term * (pattern * term) list
+  | Tuple of term list
+  | Constructor of constructor * term option
 
 (* Every abstract syntax tree node of type [term] is annotated with a place,
    that is, a position in the source code. This allows us to produce a good

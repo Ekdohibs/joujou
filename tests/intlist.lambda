@@ -1,0 +1,18 @@
+type intlist =
+  | Nil
+  | Cons of int * intlist
+
+let rec fold_left = fun f -> fun a -> fun l ->
+  match l with
+  | Nil -> a
+  | Cons (b, ls) -> fold_left f (f a b) ls
+
+let iter = fun f -> fold_left (fun a -> fun b -> f b) 0
+let rev = fold_left (fun a -> fun b -> Cons (b, a)) Nil
+let rev_map = fun f -> fold_left (fun a -> fun b -> Cons (f b, a)) Nil
+let map = fun f -> fun l -> rev (rev_map f l)
+let print_list = iter (fun x -> print x)
+;;
+
+let l = Cons (1, Cons (2, Cons (3, Nil))) in
+print_list (map (fun x -> x * x) l)
