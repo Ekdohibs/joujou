@@ -135,7 +135,7 @@ and remove_constructors matching =
         in
         Hashtbl.replace tbl tag (vars, (l1 @ l2, t) :: patterns)
       | _ -> assert false
-    ) matching;
+    ) (List.rev matching);
   Hashtbl.fold (fun tag d l -> (tag, d) :: l) tbl []
 
 and cps_match

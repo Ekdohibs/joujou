@@ -358,7 +358,7 @@ let rec cook_program env = function
     let constructors = List.map
         (fun { S.value = (name, r) ; _ } ->
            (name, Atom.fresh name, List.map (cook_type env1) r)) l in
-    let env2 = { env with
+    let env2 = { env1 with
       type_defs = Atom.Map.add n (TBaseType n) env.type_defs ;
       constructor_bindings = List.fold_left
           (fun cbinds (name, atom, _) -> Smap.add name atom cbinds)

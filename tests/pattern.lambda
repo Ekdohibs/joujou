@@ -1,0 +1,71 @@
+type v = | A | B | C | D | E | F | G | H
+type l = | Nil | Cons of (v * int) * l
+
+let v_to_int = fun x ->
+  match x with | A -> 0 | B -> 1 | C -> 2 | D -> 3 | E -> 4 | F -> 5 | G -> 6 | H -> 7
+
+let fst = fun v -> match v with (a, b) -> a
+let snd = fun v -> match v with (a, b) -> b
+
+let _ = print (fst (17, 12))
+let _ = print (snd (17, 12))
+
+let test = fun x ->
+  match x with
+  | ((A | B | C | D | E | F | G | H), x1) -> x1
+
+let _ = print (test (D, 3)) (* 3 *)
+
+let test = fun x ->
+  match x with
+  | ((A | B | C | D | E | F | G), x1) -> x1
+  | (H, x1) -> x1 + 1
+
+let _ = print (test (E, 8)) (* 8 *)
+let _ = print (test (H, 9)) (* 10 *)
+
+let test = fun x ->
+  match x with
+  | (((A | B | C | D | E | F | G), x1), x2) -> x1 + v_to_int x2
+  | ((H, x1), A) -> x1 + 12
+  | (t, z) -> 42 + v_to_int z
+
+let _ = print (test ((E, 8), B)) (* 9 *)
+let _ = print (test ((H, 9), A)) (* 21 *)
+let _ = print (test ((H, 2), G)) (* 48 *)
+
+let test = fun x ->
+  match x with
+  | (x1, (x2, A)) -> x1 + x2
+  | (x1, (x2, z)) -> v_to_int z
+
+let _ = print (test (1, (2, A))) (* 3 *)
+let _ = print (test (1, (2, G))) (* 6 *)
+
+let test = fun x ->
+  match x with
+  | Nil -> 1
+  | Cons (t, Cons (u, Nil)) -> v_to_int (fst u)
+  | Cons (t, w) -> 23
+
+let _ = print (test Nil) (* 1 *)
+let _ = print (test (Cons ((G, 12), Cons ((C, 16), Nil)))) (* 2 *)
+let _ = print (test (Cons ((C, 17), Nil))) (* 23 *)
+
+let rec test = fun x ->
+  match x with
+  | Nil -> 1
+  | Cons ((A, x1), Cons (t, Nil)) -> x1 + snd t + v_to_int (fst t)
+  | Cons (((B | D | H), x1), w) -> x1 + test w
+  | Cons ((E, x1), Cons (t, Nil)) | Cons (t, Cons ((F, x1), Nil)) -> x1
+  | Cons (t, Cons (u, Nil)) -> v_to_int (fst u)
+  | Cons (t, Cons (u, Cons (w, Nil))) -> v_to_int (fst w) + snd u
+  | Cons (t, w) -> test w + 1
+
+let _ = print (test Nil) (* 1 *)
+let _ = print (test (Cons ((A, 17), Cons ((B, 20), Nil)))) (* 38 *)
+let _ = print (test (Cons ((B, 12), Cons ((F, 19), Nil)))) (* 14 *)
+let _ = print (test (Cons ((E, 42), Cons ((G, 12), Nil)))) (* 42 *)
+let _ = print (test (Cons ((C, 11), Cons ((F, 13), Nil)))) (* 13 *)
+let _ = print (test (Cons ((G, 12), Cons ((C, 16), Nil)))) (* 2 *)
+let _ = print (test (Cons ((A, 13), Cons ((B, 42), Cons ((G, 12), Nil))))) (* 48 *)
