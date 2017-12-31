@@ -23,7 +23,7 @@ type env = {
   type_bindings : Atom.atom Smap.t ;
   type_defs : typedef Atom.Map.t ;
   constructor_bindings : Atom.atom Smap.t ;
-  constructor_defs : (Atom.atom * Ty.t list) Atom.Map.t ;
+  constructor_defs : (Atom.atom * Ty.t list * int) Atom.Map.t ;
 }
 
 
@@ -83,11 +83,13 @@ let rec unify env t1 t2 =
       tv.def <- Some t
   | _ -> unification_error t1 t2
 
-let check_unify place env t1 t2 =
+let check_unify_msg msg place env t1 t2 =
   if not !disable_type_checking then
     try unify env t1 t2 with
     | UnificationFailure (ty1, ty2) ->
-      error place "This expression has type %s but was expected of type %s.@.The type %s is incompatible with the type %s" (T.show_typ (Ty.canon t1)) (T.show_typ (Ty.canon t2)) (T.show_typ (Ty.canon ty1)) (T.show_typ (Ty.canon ty2))
+      error place msg (T.show_typ (Ty.canon t1)) (T.show_typ (Ty.canon t2)) (T.show_typ (Ty.canon ty1)) (T.show_typ (Ty.canon ty2))
+
+let check_unify = check_unify_msg "This expression has type %s but was expected of type %s@.The type %s is incompatible with the type %s"
 
 let recompute_fvars fv =
   (* If the definitions of some variables changed, then the free variables
@@ -97,16 +99,19 @@ let recompute_fvars fv =
   *)
   TVSet.fold (fun v f -> TVSet.union f (Ty.fvars (T.Tvar v))) fv TVSet.empty
 
-let add id typ env =
+let add_bound id a typ env =
   let fv = Ty.fvars typ in
-  let a = Atom.fresh id in
   let nenv = { env with
     bindings = Smap.add id
         ({ vars = TVSet.empty ; typ = typ }, a)
         env.bindings ;
     fvars = TVSet.union (recompute_fvars env.fvars) fv ;
   } in
-  (nenv, a)
+  nenv
+
+let add id typ env =
+  let a = Atom.fresh id in
+  add_bound id a typ env, a
 
 let add_gen id typ env =
   let fv = Ty.fvars typ in
@@ -183,9 +188,8 @@ let rec cook_term env { S.place ; S.value } =
     let ty2, nt2 = cook_term env t2 in
     let ty3, nt3 = cook_term env t3 in
     check_unify t1.S.place env ty1 builtin_int;
-    check_unify t3.S.place env ty2 ty3;
+    check_unify t3.S.place env ty3 ty2;
     ty2, T.IfZero (nt1, nt2, nt3)
-  | S.Match _ -> assert false
   | S.Tuple l ->
     let l = List.map (cook_term env) l in
     T.Tproduct (List.map fst l), (T.Tuple (List.map snd l))
@@ -194,7 +198,7 @@ let rec cook_term env { S.place ; S.value } =
       try Smap.find x env.constructor_bindings
       with Not_found -> error place "Unbound constructor: %s" x
     in
-    let tname, cargs = Atom.Map.find catom env.constructor_defs in
+    let tname, cargs, ctag = Atom.Map.find catom env.constructor_defs in
     let n = List.length cargs in
     let args =
       match n, t with
@@ -212,7 +216,90 @@ let rec cook_term env { S.place ; S.value } =
     let args = List.map (fun t -> t.S.place, cook_term env t) args in
     List.iter2
       (fun (place, (ty, _)) ety -> check_unify place env ty ety) args cargs;
-    T.Tident tname, T.Constructor (catom, List.map (fun (_, (_, t)) -> t) args)
+    T.Tident tname, T.Constructor ((catom, ctag), List.map (fun (_, (_, t)) -> t) args)
+  | S.Match (t, l) ->
+    let ty, nt = cook_term env t in
+    let rty = T.Tvar (TV.create ()) in
+    let nl = List.map (fun (p, t1) ->
+      let np, dv = cook_pattern env Smap.empty ty p in
+      let nenv = Smap.fold (fun x (a, t) env -> add_bound x a t env) dv env in
+      let ty1, nt1 = cook_term nenv t1 in
+      check_unify t1.S.place env ty1 rty;
+      (np, nt1)
+    ) l in
+    rty, T.Match (nt, nl)
+
+and cook_pattern env mapped_vars ty { S.value ; S.place } =
+  match value with
+  | S.PVar x ->
+    let a = try Smap.find x mapped_vars with Not_found -> Atom.fresh x in
+    T.PVar a, Smap.singleton x (a, ty)
+  | S.POr (p1, p2) ->
+    let np1, dv1 = cook_pattern env mapped_vars ty p1 in
+    let mv = Smap.fold (fun x (a, _) mv -> Smap.add x a mv) dv1 mapped_vars in
+    let np2, dv2 = cook_pattern env mv ty p2 in
+    let np = T.POr (np1, np2) in
+    let dv = Smap.merge (fun x def1 def2 ->
+      match def1, def2 with
+      | None, None -> None
+      | Some (a1, ty1), Some (a2, ty2) ->
+        assert (Atom.equal a1 a2);
+        (if not !disable_type_checking then
+          try unify env ty1 ty2 with
+          | UnificationFailure (ty1_, ty2_) ->
+            error place "The variable %s on the left-hand side of this | pattern has type %s but on the right-hand side it has type %s@.The type %s is incompatible with the type %s" x (T.show_typ (Ty.canon ty1)) (T.show_typ (Ty.canon ty2)) (T.show_typ (Ty.canon ty1_)) (T.show_typ (Ty.canon ty2_)));
+        Some (a1, ty1)
+      | _ -> error place "Variable %s must appear on both sides of this | pattern" x
+    ) dv1 dv2 in
+    np, dv
+  | S.PTuple l ->
+    let tvs = List.map (fun _ -> T.Tvar (TV.create ())) l in
+    check_unify_msg "This pattern matches values of type %s but a pattern was expected which matches values of type %s@.The type %s is incompatible with the type %s" place env (T.Tproduct tvs) ty;
+    let nl = List.map2 (cook_pattern env mapped_vars) tvs l in
+    let np = T.PTuple (List.map fst nl) in
+    let dv = List.fold_left (fun dv (_, dvi) ->
+      Smap.merge (fun x def1 def2 ->
+        match def1, def2 with
+        | None, None -> None
+        | Some (a, ty), None | None, Some (a, ty) -> Some (a, ty)
+        | Some _, Some _ ->
+          error place "The variable %s is bound several times in this matching" x
+      ) dv dvi
+    ) Smap.empty nl in
+    np, dv
+  | S.PConstructor (x, p) ->
+    let catom =
+      try Smap.find x env.constructor_bindings
+      with Not_found -> error place "Unbound constructor: %s" x
+    in
+    let tname, cargs, ctag = Atom.Map.find catom env.constructor_defs in
+    check_unify_msg "This pattern matches values of type %s but a pattern was expected which matches values of type %s@.The type %s is incompatible with the type %s" place env (T.Tident tname) ty;
+    let n = List.length cargs in
+    let args =
+      match n, p with
+      | 0, None -> []
+      | 1, Some p -> [p]
+      | 2, Some { S.value = (S.PTuple l) ; _ } -> l
+      | _ ->
+        let m = match p with
+          | None -> 0
+          | Some { S.value = (S.PTuple l) ; _} -> List.length l
+          | Some _ -> 1
+        in
+        error place "The constructor %s expects %d argument(s), but is applied here to %d argument(s)" x n m
+    in
+    let nl = List.map2 (cook_pattern env mapped_vars) cargs args in
+    let np = T.PConstructor ((catom, ctag), List.map fst nl) in
+    let dv = List.fold_left (fun dv (_, dvi) ->
+      Smap.merge (fun x def1 def2 ->
+        match def1, def2 with
+        | None, None -> None
+        | Some (a, ty), None | None, Some (a, ty) -> Some (a, ty)
+        | Some _, Some _ ->
+          error place "The variable %s is bound several times in this matching" x
+      ) dv dvi
+    ) Smap.empty nl in
+    np, dv
 
 
 and cook_let env recursive x t =
@@ -276,9 +363,10 @@ let rec cook_program env = function
       constructor_bindings = List.fold_left
           (fun cbinds (name, atom, _) -> Smap.add name atom cbinds)
           env.constructor_bindings constructors ;
-      constructor_defs = List.fold_left
-          (fun cdefs (_, name, types) -> Atom.Map.add name (n, types) cdefs)
-          env.constructor_defs constructors ;
+      constructor_defs = snd (List.fold_left
+          (fun (i, cdefs) (_, name, types) ->
+            (i + 1, Atom.Map.add name (n, types, i) cdefs))
+          (0, env.constructor_defs) constructors) ;
     } in
     cook_program env2 p
   | [] -> T.Lit 0

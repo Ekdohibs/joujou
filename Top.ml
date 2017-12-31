@@ -41,7 +41,7 @@ and term =
   | LetVal of variable * value * term
   | LetBlo of variable * block * term
   | IfZero of value * term * term
-  | Swi of value * branch list
+  | Swi of value * branch list * term option
 
 (* A branch [tag xs -> t] is labeled with an integer tag [tag], and is
    executed if the memory block carries this tag. The variables [xs] are

@@ -47,8 +47,13 @@ and value =
   | VLit of int
   | VBinOp of value * binop * value
 
+and tag =
+  int
+
 and block =
   | Lam of self * variable list * term
+  | Tuple of value list
+  | Constructor of tag * value list
 
 (* Terms include the following constructs:
 
@@ -94,6 +99,8 @@ and term =
   | LetVal of variable * value * term
   | LetBlo of variable * block * term
   | IfZero of value * term * term
+  | DestructTuple of value * variable list * term
+  | Switch of value * (tag * variable list * term) list * term option
 
 [@@deriving show { with_path = false }]
 
@@ -131,9 +138,10 @@ and fv_lambda (xs : variable list) (t : term) =
 and fv_block (b : block) =
   match b with
   | Lam (NoSelf, xs, t) ->
-      fv_lambda xs t
+    fv_lambda xs t
   | Lam (Self f, xs, t) ->
-      remove f (fv_lambda xs t)
+    remove f (fv_lambda xs t)
+  | Tuple l | Constructor (_, l) -> fv_values l
 
 and fv_term (t : term) =
   match t with
@@ -155,6 +163,13 @@ and fv_term (t : term) =
       (remove x (fv_term t2))
   | IfZero (v1, t2, t3) ->
     union (fv_value v1) (union (fv_term t2) (fv_term t3))
+  | DestructTuple (v, xs, t) ->
+    union (fv_value v) (diff (fv_term t) (of_list xs))
+  | Switch (v, l, r) ->
+    let fv = fv_value v in
+    let fv = match r with Some r -> union fv (fv_term r) | None -> fv in
+    union fv
+      (union_many (fun (_, xs, t) -> diff (fv_term t) (of_list xs)) l)
 
 let rec rename_value (r : Atom.atom Atom.Map.t) (v : value) =
   match v with
@@ -174,9 +189,11 @@ and rename_lambda (r : Atom.atom Atom.Map.t) (xs : variable list) (t : term) =
 and rename_block (r : Atom.atom Atom.Map.t) (b : block) =
   match b with
   | Lam (NoSelf, xs, t) ->
-      Lam (NoSelf, xs, rename_lambda r xs t)
+    Lam (NoSelf, xs, rename_lambda r xs t)
   | Lam (Self f, xs, t) ->
-      Lam (Self f, xs, rename_lambda r (f :: xs) t)
+    Lam (Self f, xs, rename_lambda r (f :: xs) t)
+  | Tuple l -> Tuple (rename_values r l)
+  | Constructor (tag, l) -> Constructor (tag, rename_values r l)
 
 and rename_term (r : Atom.atom Atom.Map.t) (t : term) =
   match t with
@@ -195,7 +212,17 @@ and rename_term (r : Atom.atom Atom.Map.t) (t : term) =
     LetBlo (x, rename_block r b1, rename_term r t2)
   | IfZero (v1, t2, t3) ->
     IfZero (rename_value r v1, rename_term r t2, rename_term r t3)
-
+  | DestructTuple (v, xs, t) ->
+    assert (not (List.exists (fun x -> Atom.Map.mem x r) xs));
+    DestructTuple (rename_value r v, xs, rename_term r t)
+  | Switch (v, l, t) ->
+    let t = match t with None -> None | Some t -> Some (rename_term r t) in
+    let v = rename_value r v in
+    let l = List.map (fun (tag, xs, t) ->
+      assert (not (List.exists (fun x -> Atom.Map.mem x r) xs));
+      (tag, xs, rename_term r t)
+    ) l in
+    Switch (v, l, t)
 
 (* [let x_1 = v_1 in ... let x_n = v_n in t] *)
 
@@ -231,6 +258,13 @@ let rec simpl (t : term) : term =
         parallel_let args vals body
       | _ -> LetBlo (f, Lam (self, args, body), t)
     end
+  | LetBlo (x, b, t) ->
+    LetBlo (x, b, simpl t)
   | IfZero (v, t1, t2) -> IfZero (v, simpl t1, simpl t2)
+  | DestructTuple (v, xs, t) -> DestructTuple (v, xs, simpl t)
+  | Switch (v, l, t) ->
+    let t = match t with None -> None | Some t -> Some (simpl t) in
+    let l = List.map (fun (tag, xs, t) -> (tag, xs, simpl t)) l in
+    Switch (v, l, t)
 
 let optimize = simpl

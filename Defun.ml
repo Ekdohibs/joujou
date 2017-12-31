@@ -77,8 +77,6 @@ let rec defun (t : S.term) (st : defun_state) : T.term =
     let app, _ = get_apply_def st arity in
     defun_values st (fun args -> T.TailCall (app, args)) (f :: args)
   | S.ContCall (f, k, args) ->
-(*    let arity = List.length args in
-      defun (S.TailCall (f, (k :: args))) st *)
     let arity = List.length args in
     let cont, _ = get_cont_def st arity in
     defun_values st (fun args -> T.TailCall (cont, args)) (f :: args @ [k])
@@ -110,6 +108,17 @@ let rec defun (t : S.term) (st : defun_state) : T.term =
     let nt = defun t st in
     st.extracted_functions <- fdef :: st.extracted_functions;
     T.LetBlo (f, T.Con (tag, T.vvars fv), nt)
+  | S.LetBlo (x, S.Tuple l, t) ->
+    defun_values st (fun l -> T.LetBlo (x, T.Con (0, l), defun t st)) l
+  | S.LetBlo (x, S.Constructor (tag, l), t) ->
+    defun_values st (fun l -> T.LetBlo (x, T.Con (tag, l), defun t st)) l
+  | S.DestructTuple (v, xs, t) ->
+    defun_value st (fun v -> T.Swi (v, [T.Branch (0, xs, defun t st)], None)) v
+  | S.Switch (v, l, t) ->
+    let t = match t with None -> None | Some t -> Some (defun t st) in
+    defun_value st (fun v ->
+        T.Swi (v, List.map (fun (tag, xs, t) ->
+            T.Branch (tag, xs, defun t st)) l, t)) v
   | S.IfZero (v, t1, t2) ->
     defun_value st (fun v -> T.IfZero (v, defun t1 st, defun t2 st)) v
 
@@ -148,7 +157,7 @@ let defun_term (t : S.term) : T.program =
   let cont_branches = Array.make (max_arity + 1) [] in
   let cont_call_id = Array.init max_arity (fun _ -> gen_id ()) in
   let underapplied_tags = List.fold_left (fun m (_, tag, fv, arity) ->
-      let tags = Array.init (arity - 1) (fun _ -> gen_id ()) in
+      let tags = Array.init (max 0 (arity - 1)) (fun _ -> gen_id ()) in
       let v = (fv, tags) in
       Array.fold_left (fun m tag -> IMap.add tag v m) (IMap.add tag v m) tags)
       IMap.empty st.extracted_functions in
@@ -214,10 +223,10 @@ let defun_term (t : S.term) : T.program =
   done;
   let applies = List.map (fun (arity, (name, args)) ->
       let f = Atom.fresh "apply_f" in
-      T.Fun (name, f :: args, T.Swi (T.vvar f, apply_branches.(arity)))
+      T.Fun (name, f :: args, T.Swi (T.vvar f, apply_branches.(arity), None))
     ) (IMap.bindings st.apply_defs) in
   let conts = List.map (fun (arity, (name, args)) ->
       let f = Atom.fresh "cont_f" in
-      T.Fun (name, f :: args, T.Swi (T.vvar f, cont_branches.(arity)))
+      T.Fun (name, f :: args, T.Swi (T.vvar f, cont_branches.(arity), None))
     ) (IMap.bindings st.cont_defs) in
   T.Prog (conts @ applies @ (List.map (fun (f, _, _, _) -> f) st.extracted_functions), nt)
