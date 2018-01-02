@@ -60,7 +60,7 @@ let rec cps (t : S.term) (k : T.value) : T.term =
     lambda_let (T.Lam (T.NoSelf, [match_var],
       lambda_let (T.Lam (T.NoSelf, [], T.Exit)) (fun handle ->
         cps_match [T.vvar match_var]
-          (List.map (fun (p, t) -> [p], cps t k) pl) handle)
+          (List.map (fun (p, t) -> match p with S.Pattern p -> [p], cps t k | S.Effect _ -> assert false) pl) handle)
     )) (cps t)
   | S.Tuple l ->
     let vars = List.map (fun _ -> Atom.fresh "cps_tuple_var") l in

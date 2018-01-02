@@ -221,13 +221,19 @@ let rec cook_term env { S.place ; S.value } =
     let ty, nt = cook_term env t in
     let rty = T.Tvar (TV.create ()) in
     let nl = List.map (fun (p, t1) ->
-      let np, dv = cook_pattern env Smap.empty ty p in
+      let np, dv = cook_pattern_or_effect env ty p in
       let nenv = Smap.fold (fun x (a, t) env -> add_bound x a t env) dv env in
       let ty1, nt1 = cook_term nenv t1 in
       check_unify t1.S.place env ty1 rty;
       (np, nt1)
     ) l in
     rty, T.Match (nt, nl)
+
+and cook_pattern_or_effect env ty = function
+  | S.Pattern p ->
+    let p, dv = cook_pattern env Smap.empty ty p in
+    T.Pattern p, dv
+  | S.Effect _ -> assert false
 
 and cook_pattern env mapped_vars ty { S.value ; S.place } =
   match value with
@@ -344,7 +350,7 @@ let rec cook_program env = function
   | { S.value = S.DLet (recursive, x, t) ; _ } :: p ->
     let env, x, nt = cook_let env recursive x t in
     T.Let (x, nt, cook_program env p)
-  | { S.value = S.DTypeSynonym (x, t) ; _} :: p ->
+  | { S.value = S.DTypeSynonym (x, t) ; _ } :: p ->
     let n = Atom.fresh x in
     let nenv = { env with
       type_bindings = Smap.add x n env.type_bindings ;
@@ -352,7 +358,7 @@ let rec cook_program env = function
           env.type_defs ;
     } in
     cook_program nenv p
-  | { S.value = S.DNewType (x, l) ; _} :: p ->
+  | { S.value = S.DNewType (x, l) ; _ } :: p ->
     let n = Atom.fresh x in
     let env1 = { env with type_bindings = Smap.add x n env.type_bindings } in
     let constructors = List.map
@@ -369,6 +375,8 @@ let rec cook_program env = function
           (0, env.constructor_defs) constructors) ;
     } in
     cook_program env2 p
+  | { S.value = S.DEffect (x, l) ; _ } :: p ->
+    assert false
   | [] -> T.Lit 0
 
 let cook_program = cook_program base_env

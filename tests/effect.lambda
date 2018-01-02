@@ -1,0 +1,33 @@
+effect choose = Choose : int
+
+type intlist = | Nil | Cons of int * intlist
+let choose = fun a -> fun b ->
+  ifzero Choose then a else b
+
+let f = fun x ->
+  let u = choose 5 12 in
+  let v = choose 3 17 in
+  u + v
+
+let run_zero = fun f ->
+  match f 0 with
+  | x -> x
+  | effect Choose k -> k 0
+
+let rec append = fun l1 -> fun l2 ->
+  match l1 with
+  | Nil -> l2
+  | Cons (x, l1) -> Cons (x, append l1 l2)
+
+let run_all = fun f ->
+  match f 0 with
+  | x -> Cons (x, Nil)
+  | effect Choose k -> append (k 0) (k 1)
+
+let rec print_list = fun l ->
+  match l with
+  | Nil -> 0
+  | Cons (x, l) -> let _ = print x in print_list l
+
+let _ = print (run_zero f)
+let _ = print_list (run_all f)

@@ -34,7 +34,7 @@ and term_ =
   | Let of recursive * variable * term * term
   | IfZero of term * term * term
   | CallCc of term
-  | Match of term * (pattern * term) list
+  | Match of term * (pattern_or_effect * term) list
   | Tuple of term list
   | Constructor of constructor * term option
 
@@ -54,6 +54,10 @@ and pattern_ =
 and pattern =
   pattern_ placed
 
+and pattern_or_effect =
+  | Pattern of pattern
+  | Effect of constructor * pattern option * variable
+
 and ty_ =
   | TVar of variable
   | TTuple of ty list
@@ -65,6 +69,7 @@ and ty =
 and decl_ =
   | DLet of recursive * variable * term
   | DNewType of variable * (constructor * ty list) placed list
+  | DEffect of variable * (constructor * ty option * ty) placed list
   | DTypeSynonym of variable * ty
   | DTerm of term
 

@@ -54,13 +54,17 @@ and term =
   | CallCc of term
   | Tuple of term list
   | Constructor of constructor * term list
-  | Match of term * (pattern * term) list
+  | Match of term * (pattern_or_effect * term) list
 
 and pattern =
   | PVar of variable
   | PConstructor of constructor * pattern list
   | POr of pattern * pattern
   | PTuple of pattern list
+
+and pattern_or_effect =
+  | Pattern of pattern
+  | Effect of constructor * pattern option * variable
 
 and typ =
   | Tident of tname

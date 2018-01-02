@@ -3,14 +3,16 @@
 %token<int> INTLITERAL
 %token FUN IN LET PRINT REC CALLCC
 %token IFZERO THEN ELSE
-%token ARROW EQ LPAREN RPAREN BAR COMMA STAR SEMISEMI
-%token TYPE OF
+%token ARROW EQ LPAREN RPAREN BAR COMMA STAR SEMISEMI COLON
+%token TYPE OF EFFECT
 %token MATCH WITH
 %token<RawLambda.binop> MULOP ADDOP
 %token EOF
 
 %nonassoc IN
 %nonassoc WITH
+%nonassoc below_EFFECT
+%nonassoc EFFECT
 %left BAR
 (* %left COMMA *)
 %right ARROW
@@ -68,6 +70,16 @@ decl_:
     { DNewType (x, l) }
 | TYPE x = IDENT EQ t = ty
     { DTypeSynonym (x, t) }
+| EFFECT x = IDENT EQ l = left_flexible_list(BAR, placed(effect_decl_case_))
+    { DEffect (x, l) }
+
+effect_decl_case_:
+| c = UIDENT COLON t = ty
+    {
+      match t.value with
+      | TArrow (t1, t2) -> c, Some t1, t2
+      | _ -> c, None, t
+    }
 
 type_decl_case_:
 | c = UIDENT { (c, []) }
@@ -131,16 +143,32 @@ any_term_:
     { Let (mode, x, t1, t2) }
 | IFZERO t1 = any_term THEN t2 = any_term ELSE t3 = any_term
     { IfZero (t1, t2, t3) }
-| MATCH t1 = any_term WITH cases = left_flexible_list(BAR, match_case)
+| MATCH t1 = any_term WITH cases = match_cases
     { Match (t1, cases) }
 | t = application_term COMMA l = separated_nonempty_list(COMMA, application_term)
     { Tuple (t :: l) }
+
+%inline match_cases:
+| l = match_cases_ { List.rev l }
+
+match_cases_:
+| (* empty *) %prec below_EFFECT
+    { [] }
+| x = match_case
+    { [x] }
+| xs = match_cases_ BAR x = match_case
+    { x :: xs }
 
 %inline any_term:
 | t = placed(any_term_) { t }
 
 match_case:
-| p = pattern ARROW t = any_term { (p, t) }
+| p = pattern ARROW t = any_term
+    { (Pattern p, t) }
+| EFFECT c = UIDENT p = pattern k = IDENT ARROW t = any_term
+    { (Effect (c, Some p, k), t) }
+| EFFECT c = UIDENT k = IDENT ARROW t = any_term
+    { (Effect (c, None, k), t) }
 
 %inline pattern:
 | p = placed(pattern_) { p }

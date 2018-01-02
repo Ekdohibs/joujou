@@ -7,6 +7,7 @@ open RawLambda
 
 let kw = [
   "callcc", CALLCC ;
+  "effect", EFFECT ;
   "else", ELSE ;
   "fun", FUN ;
   "ifzero", IFZERO ;
@@ -98,6 +99,8 @@ and token = parse
     { COMMA }
 | ";;"
     { SEMISEMI }
+| ":"
+    { COLON }
 | (lowercase identchar *) as x
     { try Hashtbl.find keywords x with Not_found -> IDENT x }
 | (uppercase identchar *) as x
