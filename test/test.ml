@@ -15,6 +15,9 @@ let create_expected =
 let verbosity =
   ref 0
 
+let debug =
+  ref false
+
 let usage =
   sprintf "Usage: %s\n" argv.(0)
 
@@ -23,6 +26,8 @@ let spec = Arg.align [
                        " recreate the expected-output files";
   "--verbosity",       Arg.Int ((:=) verbosity),
                        " set the verbosity level (0-2)";
+  "--debug",           Arg.Set debug,
+                       " compile the files in debug mode";
 ]
 
 let () =
@@ -33,6 +38,9 @@ let create_expected =
 
 let verbosity =
   !verbosity
+
+let debug =
+  !debug
 
 (* -------------------------------------------------------------------------- *)
 
@@ -83,7 +91,10 @@ let joujou =
   src ^ "/joujou"
 
 let gcc =
-  sprintf "gcc -O2 -I %s" src
+  if debug then
+    sprintf "gcc -O0 -g -I %s" src
+  else
+    sprintf "gcc -O2 -I %s" src
 
 (* -------------------------------------------------------------------------- *)
 

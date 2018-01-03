@@ -63,8 +63,9 @@ and block =
      with actual arguments [vs]. (The value [v] should be a function, and its
      arity should be the length of [vs].)
 
-   - The continuation call [ContCall (v, k, vs)] transfers control to the
-     function [v], with actual arguments [vs], and continuation to apply [k].
+   - The continuation call [ContCall (v, k, h, vs)] transfers control to the
+     function [v], with actual arguments [vs], continuation to apply [k], and
+     effect handler [e].
      (The values [v] and [k] should be functions, [k] having arity exactly 1.)
 
    - The term [Print (v, t)] prints the value [v], then executes the term [t].
@@ -77,24 +78,24 @@ and block =
      variable [x] to its address, then executes the term [t].
 
 
-   The semantics of [ContCall (f, k, [x1; ...; xn])] are defined as follows:
+   The semantics of [ContCall (f, k, h, [x1; ...; xn])] are defined as follows:
 
-   - [ContCall (f, k, [x1; ...; xn]) -> TailCall (f, [x1; ...; xn; k])] if
+   - [ContCall (f, k, h, [x1; ...; xn]) -> TailCall (f, [x1; ...; xn; k; h])] if
      f has arity n + 1.
 
-   - [ContCall (f, k, [x1; ...; xn]) ->
-       TailCall (k, (fun x_{n+1} ... xm k2 -> ContCall (f, k2, [x1; ...; xm])))]
+   - [ContCall (f, k, h, [x1; ...; xn]) ->
+       TailCall (k, (fun x_{n+1} ... xm k2 h2 -> ContCall (f, k2, h2, [x1; ...; xm])))]
      if f has arity m + 1 > n + 1.
 
-   - [ContCall (f, k, [x1; ...; xn]) ->
-       TailCall (f, [x1; ...; xm; (fun g -> ContCall (g, k, [x_{m+1}; ...; xn]))])]
+   - [ContCall (f, k, h, [x1; ...; xn]) ->
+       TailCall (f, [x1; ...; xm; (fun g -> ContCall (g, k, h, [x_{m+1}; ...; xn])); h])]
      if f has arity m + 1 < n + 1.
 *)
 
 and term =
   | Exit
   | TailCall of value * value list
-  | ContCall of value * value * value list
+  | ContCall of value * value * value * value list
   | Print of value * term
   | LetVal of variable * value * term
   | LetBlo of variable * block * term
@@ -149,8 +150,8 @@ and fv_term (t : term) =
     empty
   | TailCall (v, vs) ->
     fv_values (v :: vs)
-  | ContCall (v, k, vs) ->
-    fv_values (v :: k :: vs)
+  | ContCall (v, k, h, vs) ->
+    fv_values (v :: k :: h :: vs)
   | Print (v1, t2) ->
     union (fv_value v1) (fv_term t2)
   | LetVal (x, v1, t2) ->
@@ -200,8 +201,8 @@ and rename_term (r : Atom.atom Atom.Map.t) (t : term) =
   | Exit -> Exit
   | TailCall (v, vs) ->
     TailCall (rename_value r v, rename_values r vs)
-  | ContCall (v, k, vs) ->
-    ContCall (rename_value r v, rename_value r k, rename_values r vs)
+  | ContCall (v, k, h, vs) ->
+    ContCall (rename_value r v, rename_value r k, rename_value r h, rename_values r vs)
   | Print (v1, t2) ->
     Print (rename_value r v1, rename_term r t2)
   | LetVal (x, v1, t2) ->

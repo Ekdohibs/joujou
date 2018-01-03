@@ -69,7 +69,7 @@ and ty =
 and decl_ =
   | DLet of recursive * variable * term
   | DNewType of variable * (constructor * ty list) placed list
-  | DEffect of variable * (constructor * ty option * ty) placed list
+  | DEffect of variable * (constructor * ty option * ty) placed
   | DTypeSynonym of variable * ty
   | DTerm of term
 

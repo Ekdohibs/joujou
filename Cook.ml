@@ -23,7 +23,10 @@ type env = {
   type_bindings : Atom.atom Smap.t ;
   type_defs : typedef Atom.Map.t ;
   constructor_bindings : Atom.atom Smap.t ;
-  constructor_defs : (Atom.atom * Ty.t list * int) Atom.Map.t ;
+  constructor_defs : (Atom.atom * Ty.t list * int * bool) Atom.Map.t ;
+  effect_bindings : Atom.atom Smap. t;
+  effect_defs : (Ty.t option * Ty.t * int) Atom.Map.t ;
+  free_effect_tag : int ;
 }
 
 
@@ -37,6 +40,9 @@ let base_env = {
   type_defs = Atom.Map.singleton builtin_int_id (TBaseType builtin_int_id) ;
   constructor_bindings = Smap.empty ;
   constructor_defs = Atom.Map.empty ;
+  effect_bindings = Smap.empty ;
+  effect_defs = Atom.Map.empty ;
+  free_effect_tag = 0 ;
 }
 
 exception UnificationFailure of Ty.t * Ty.t
@@ -198,7 +204,7 @@ let rec cook_term env { S.place ; S.value } =
       try Smap.find x env.constructor_bindings
       with Not_found -> error place "Unbound constructor: %s" x
     in
-    let tname, cargs, ctag = Atom.Map.find catom env.constructor_defs in
+    let tname, cargs, ctag, is_effect = Atom.Map.find catom env.constructor_defs in
     let n = List.length cargs in
     let args =
       match n, t with
@@ -216,7 +222,7 @@ let rec cook_term env { S.place ; S.value } =
     let args = List.map (fun t -> t.S.place, cook_term env t) args in
     List.iter2
       (fun (place, (ty, _)) ety -> check_unify place env ty ety) args cargs;
-    T.Tident tname, T.Constructor ((catom, ctag), List.map (fun (_, (_, t)) -> t) args)
+    T.Tident tname, T.Constructor ((catom, ctag, is_effect), List.map (fun (_, (_, t)) -> t) args)
   | S.Match (t, l) ->
     let ty, nt = cook_term env t in
     let rty = T.Tvar (TV.create ()) in
@@ -233,7 +239,7 @@ and cook_pattern_or_effect env ty = function
   | S.Pattern p ->
     let p, dv = cook_pattern env Smap.empty ty p in
     T.Pattern p, dv
-  | S.Effect _ -> assert false
+  | S.Effect (c, p, k) -> assert false
 
 and cook_pattern env mapped_vars ty { S.value ; S.place } =
   match value with
@@ -278,7 +284,9 @@ and cook_pattern env mapped_vars ty { S.value ; S.place } =
       try Smap.find x env.constructor_bindings
       with Not_found -> error place "Unbound constructor: %s" x
     in
-    let tname, cargs, ctag = Atom.Map.find catom env.constructor_defs in
+    let tname, cargs, ctag, is_effect = Atom.Map.find catom env.constructor_defs in
+    if is_effect then
+      error place "This constructor is an effect constructor, not a value constructor";
     check_unify_msg "This pattern matches values of type %s but a pattern was expected which matches values of type %s@.The type %s is incompatible with the type %s" place env (T.Tident tname) ty;
     let n = List.length cargs in
     let args =
@@ -295,7 +303,7 @@ and cook_pattern env mapped_vars ty { S.value ; S.place } =
         error place "The constructor %s expects %d argument(s), but is applied here to %d argument(s)" x n m
     in
     let nl = List.map2 (cook_pattern env mapped_vars) cargs args in
-    let np = T.PConstructor ((catom, ctag), List.map fst nl) in
+    let np = T.PConstructor ((catom, ctag, false), List.map fst nl) in
     let dv = List.fold_left (fun dv (_, dvi) ->
       Smap.merge (fun x def1 def2 ->
         match def1, def2 with
@@ -371,12 +379,23 @@ let rec cook_program env = function
           env.constructor_bindings constructors ;
       constructor_defs = snd (List.fold_left
           (fun (i, cdefs) (_, name, types) ->
-            (i + 1, Atom.Map.add name (n, types, i) cdefs))
+            (i + 1, Atom.Map.add name (n, types, i, false) cdefs))
           (0, env.constructor_defs) constructors) ;
     } in
     cook_program env2 p
-  | { S.value = S.DEffect (x, l) ; _ } :: p ->
-    assert false
+  | { S.value = S.DEffect (x, { S.value = (c, t1, t2) ; _ }) ; _ } :: p ->
+    let n = Atom.fresh x in
+    let cn = Atom.fresh c in
+    let ty1 = match t1 with None -> None | Some t1 -> Some (cook_type env t1) in
+    let ty2 = cook_type env t2 in
+    let nenv = { env with
+      effect_bindings = Smap.add x n env.effect_bindings ;
+      effect_defs = Atom.Map.add n (ty1, ty2, env.free_effect_tag) env.effect_defs ;
+      free_effect_tag = env.free_effect_tag + 1 ;
+      constructor_bindings = Smap.add c cn env.constructor_bindings ;
+      constructor_defs = Atom.Map.add cn (n, (match ty1 with None -> [] | Some ty1 -> [ty1]), env.free_effect_tag, true) env.constructor_defs ;
+    } in
+    cook_program nenv p
   | [] -> T.Lit 0
 
 let cook_program = cook_program base_env

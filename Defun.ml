@@ -10,14 +10,18 @@ let gen_id =
 
 type defun_state = {
   mutable toplevel_functions : (Atom.atom * int) Atom.Map.t ;
-  mutable extracted_functions : (T.function_declaration * int * Atom.atom list * int) list ;
+  (* Maps function name to arity, tag when already applied to some
+     number of arguments, name, and free variables *)
+  mutable functions_tags : (int * int array * Atom.atom * Atom.atom list) Atom.Map.t ;
+  mutable extracted_functions : T.function_declaration Atom.Map.t ;
   (* Maps arity to the name and the names of the arguments of the
      application function for that arity *)
   mutable apply_defs : (Atom.atom * Atom.atom list) IMap.t ;
-  (* Maps arity to the name and the names of the arguments of the
+  (* Maps arity to the name, the names of the arguments and the tag of the
      continuation application function for that arity (including
      the continuation argument, so the length of the list is arity + 1). *)
-  mutable cont_defs : (Atom.atom * Atom.atom list) IMap.t ;
+  mutable cont_defs : (Atom.atom * Atom.atom list * int) IMap.t ;
+  mutable max_contcall_arity : int ;
 }
 
 let ( <|> ) a b =
@@ -41,9 +45,10 @@ let get_cont_def (st : defun_state) (arity : int) =
   with Not_found ->
     let v = Atom.fresh ("defun_cont_" ^ (string_of_int arity) ^ "_") in
     let args =
-      List.map (fun _ -> Atom.fresh "defun_cont_var") (0 <|> arity) @ [Atom.fresh "defun_cont_f"] in
-    st.cont_defs <- IMap.add arity (v, args) st.cont_defs;
-    (v, args)
+      List.map (fun _ -> Atom.fresh "defun_cont_var") (0 <|> arity) @ [Atom.fresh "defun_cont_f"; Atom.fresh "defun_cont_h"] in
+    let tag = gen_id () in
+    st.cont_defs <- IMap.add arity (v, args, tag) st.cont_defs;
+    (v, args, tag)
 
 
 let rec defun_value (st : defun_state) (k : T.value -> T.term) (t : S.value) : T.term =
@@ -66,61 +71,38 @@ let rec defun_values (st : defun_state) (k : T.value list -> T.term) (l : S.valu
   | [] -> k []
   | v :: ls -> defun_value st (fun v -> defun_values st (fun ls -> k (v :: ls)) ls) v
 
-let rec defun (t : S.term) (st : defun_state) : T.term =
+let rec precompute (t : S.term) (st : defun_state) : unit =
   match t with
-  | S.Exit -> T.Exit
-  | S.TailCall (S.VVar f, args) when Atom.Map.mem f st.toplevel_functions ->
-    defun_values st (fun args ->
-        T.TailCall (fst (Atom.Map.find f st.toplevel_functions), args)) args
-  | S.TailCall (f, args) ->
-    let arity = List.length args in
-    let app, _ = get_apply_def st arity in
-    defun_values st (fun args -> T.TailCall (app, args)) (f :: args)
-  | S.ContCall (f, k, args) ->
-    let arity = List.length args in
-    let cont, _ = get_cont_def st arity in
-    defun_values st (fun args -> T.TailCall (cont, args)) (f :: args @ [k])
-  | S.Print (v, t) -> defun_value st (fun v -> T.Print (v, defun t st)) v
-  | S.LetVal (x, v, t) ->
-    defun_value st (fun v -> T.LetVal (x, v, defun t st)) v
+  | S.Exit | S.TailCall _ -> ()
+  | S.ContCall (_, _, _, args) ->
+    st.max_contcall_arity <- max st.max_contcall_arity (List.length args)
+  | S.Print (_, t) | S.LetVal (_, _, t) | S.DestructTuple (_, _, t) ->
+    precompute t st
+  | S.IfZero (_, t1, t2) ->
+    precompute t1 st;
+    precompute t2 st
+  | S.Switch (_, l, t) ->
+    (match t with None -> () | Some t -> precompute t st);
+    List.iter (fun (_, _, t) -> precompute t st) l
   | S.LetBlo (f, (S.Lam (self, args, body) as blo), t) ->
     let fv = Atom.Set.(elements
        (diff (S.fv_block blo) (Atom.Map.domain st.toplevel_functions))) in
-    let fv1 = List.map Atom.copy fv in
-    let ren = List.fold_left2 (fun m u v -> Atom.Map.add u v m) Atom.Map.empty fv fv1 in
-    let fname = match self with
-      | S.NoSelf -> Atom.fresh "defun_lambda"
-      | S.Self f -> Atom.copy f
-    in
-    let tag = gen_id () in
-    if fv = [] then begin
-      st.toplevel_functions <- Atom.Map.add f (fname, tag) st.toplevel_functions;
-      match self with
-      | S.NoSelf -> ()
-      | S.Self f -> st.toplevel_functions <- Atom.Map.add f (fname, tag) st.toplevel_functions
-    end;
-    let nbody = defun (S.rename_term ren body) st in
-    let nbody = match self with
-      | S.NoSelf -> nbody
-      | S.Self f -> T.LetBlo (f, T.Con (tag, T.vvars fv1), nbody)
-    in
-    let fdef = (T.Fun (fname, fv1 @ args, nbody), tag, fv1, List.length args) in
-    let nt = defun t st in
-    st.extracted_functions <- fdef :: st.extracted_functions;
-    T.LetBlo (f, T.Con (tag, T.vvars fv), nt)
-  | S.LetBlo (x, S.Tuple l, t) ->
-    defun_values st (fun l -> T.LetBlo (x, T.Con (0, l), defun t st)) l
-  | S.LetBlo (x, S.Constructor (tag, l), t) ->
-    defun_values st (fun l -> T.LetBlo (x, T.Con (tag, l), defun t st)) l
-  | S.DestructTuple (v, xs, t) ->
-    defun_value st (fun v -> T.Swi (v, [T.Branch (0, xs, defun t st)], None)) v
-  | S.Switch (v, l, t) ->
-    let t = match t with None -> None | Some t -> Some (defun t st) in
-    defun_value st (fun v ->
-        T.Swi (v, List.map (fun (tag, xs, t) ->
-            T.Branch (tag, xs, defun t st)) l, t)) v
-  | S.IfZero (v, t1, t2) ->
-    defun_value st (fun v -> T.IfZero (v, defun t1 st, defun t2 st)) v
+    let arity = List.length args in
+    let tags = Array.init (max 1 (arity - 2)) (fun _ -> gen_id ()) in
+    let ff = match self with S.NoSelf -> [f] | S.Self f1 -> [f; f1] in
+    let fname =
+      match self with S.NoSelf -> Atom.copy f | S.Self f1 -> Atom.copy f1 in
+    List.iter (fun f ->
+        st.functions_tags <-
+          Atom.Map.add f (arity, tags, fname, fv) st.functions_tags) ff;
+    if fv = [] then
+      List.iter (fun f ->
+          st.toplevel_functions <-
+            Atom.Map.add f (fname, tags.(0)) st.toplevel_functions) ff;
+    precompute t st;
+    precompute body st
+  | S.LetBlo (_, _, t) ->
+    precompute t st
 
 let split_args l k =
   let rec spl l k =
@@ -137,96 +119,133 @@ let rec split_last l =
   | [x] -> (x, [])
   | x :: ls -> let a, b = split_last ls in a, x :: b
 
+let make_contcall (fname : Atom.atom) (already_applied : int) (k : T.value) (h : T.value) (args : T.value list) (extra : T.value list) (st : defun_state) : T.term =
+  let arity, tags, name, fv = Atom.Map.find fname st.functions_tags in
+  assert (List.length fv + already_applied = List.length extra);
+  let n = List.length args + already_applied in
+  if n = arity - 2 then
+    T.TailCall (name, extra @ args @ [k; h])
+  else if n < arity - 2 then
+    let blo_name = Atom.fresh "cont_call_few_f" in
+    let ap, _ = get_apply_def st 1 in
+    T.LetBlo (blo_name, T.Con (tags.(n), extra @ args),
+              T.TailCall (ap, k :: [T.vvar blo_name]))
+  else
+    let argsa, argsb = split_args args ((arity - 2) - already_applied) in
+    let blo_name = Atom.fresh "cont_call_many_f" in
+    let _, _, cont_tag = get_cont_def st (n - (arity - 2)) in
+    T.LetBlo (blo_name, T.Con (cont_tag, argsb @ [k; h]),
+             T.TailCall (name, extra @ argsa @ [T.vvar blo_name; h]))
+
+
+let rec defun (t : S.term) (st : defun_state) : T.term =
+  match t with
+  | S.Exit -> T.Exit
+  | S.TailCall (S.VVar f, args) when Atom.Map.mem f st.toplevel_functions ->
+    defun_values st (fun args ->
+        T.TailCall (fst (Atom.Map.find f st.toplevel_functions), args)) args
+  | S.TailCall (f, args) ->
+    let arity = List.length args in
+    let app, _ = get_apply_def st arity in
+    defun_values st (fun args -> T.TailCall (app, args)) (f :: args)
+  | S.ContCall (f, k, h, args) ->
+    let arity = List.length args in
+    let cont, _, _ = get_cont_def st arity in
+    defun_values st (fun args -> T.TailCall (cont, args)) (f :: args @ [k; h])
+  | S.Print (v, t) -> defun_value st (fun v -> T.Print (v, defun t st)) v
+  | S.LetVal (x, v, t) ->
+    defun_value st (fun v -> T.LetVal (x, v, defun t st)) v
+  | S.LetBlo (f, (S.Lam (self, args, body) as blo), t) ->
+    Format.eprintf "%s@." (S.show_variable f);
+    let arity, tags, name, _ = Atom.Map.find f st.functions_tags in
+    let fv = Atom.Set.(elements
+       (diff (S.fv_block blo) (Atom.Map.domain st.toplevel_functions))) in
+    let fv1 = List.map Atom.copy fv in
+    let ren = List.fold_left2 (fun m u v -> Atom.Map.add u v m) Atom.Map.empty fv fv1 in
+    let nbody = defun (S.rename_term ren body) st in
+    let nbody = match self with
+      | S.NoSelf -> nbody
+      | S.Self f -> T.LetBlo (f, T.Con (tags.(0), T.vvars fv1), nbody)
+    in
+    let fdef = T.Fun (name, fv1 @ args, nbody) in
+    let nt = defun t st in
+    st.extracted_functions <- Atom.Map.add f fdef st.extracted_functions;
+    T.LetBlo (f, T.Con (tags.(0), T.vvars fv), nt)
+  | S.LetBlo (x, S.Tuple l, t) ->
+    defun_values st (fun l -> T.LetBlo (x, T.Con (0, l), defun t st)) l
+  | S.LetBlo (x, S.Constructor (tag, l), t) ->
+    defun_values st (fun l -> T.LetBlo (x, T.Con (tag, l), defun t st)) l
+  | S.DestructTuple (v, xs, t) ->
+    defun_value st (fun v -> T.Swi (v, [T.Branch (0, xs, defun t st)], None)) v
+  | S.Switch (v, l, t) ->
+    let t = match t with None -> None | Some t -> Some (defun t st) in
+    defun_value st (fun v ->
+        T.Swi (v, List.map (fun (tag, xs, t) ->
+            T.Branch (tag, xs, defun t st)) l, t)) v
+  | S.IfZero (v, t1, t2) ->
+    defun_value st (fun v -> T.IfZero (v, defun t1 st, defun t2 st)) v
+
 let defun_term (t : S.term) : T.program =
   let st = {
     toplevel_functions = Atom.Map.empty ;
-    extracted_functions = [] ;
+    functions_tags = Atom.Map.empty ;
+    extracted_functions = Atom.Map.empty ;
     apply_defs = IMap.empty ;
     cont_defs = IMap.empty ;
+    max_contcall_arity = 0 ;
   } in
+  Atom.Map.iter (fun z _ -> Format.eprintf "%s " (S.show_variable z)) st.functions_tags;
+  Format.eprintf "@.";
+  precompute t st;
+  let max_arity = st.max_contcall_arity in
   let nt = defun t st in
-  let max_arity = List.fold_left max 0
-      (List.map (fun (_, _, _, arity) -> arity) st.extracted_functions) in
-  let max_arity = max max_arity
-      (if IMap.is_empty st.apply_defs then 0 else
-        (fst (IMap.max_binding st.apply_defs))) in
-  let max_arity = max max_arity
-      (if IMap.is_empty st.cont_defs then 0 else
-         (fst (IMap.max_binding st.cont_defs))) in
-  let apply_branches = Array.make (max_arity + 1) [] in
+  let apply_branches = Array.make 2 [] in
   let cont_branches = Array.make (max_arity + 1) [] in
-  let cont_call_id = Array.init max_arity (fun _ -> gen_id ()) in
-  let underapplied_tags = List.fold_left (fun m (_, tag, fv, arity) ->
-      let tags = Array.init (max 0 (arity - 1)) (fun _ -> gen_id ()) in
-      let v = (fv, tags) in
-      Array.fold_left (fun m tag -> IMap.add tag v m) (IMap.add tag v m) tags)
-      IMap.empty st.extracted_functions in
-  let add_fct_branches name tag fv arity is_contcall =
-    let fv2 = List.map Atom.copy fv in
-    let _, aargs = get_apply_def st arity in
-    if is_contcall then
-      apply_branches.(arity) <-
-        T.Branch (tag, fv2, T.TailCall (name, T.vvars (aargs @ fv2))) ::
-        apply_branches.(arity)
-    else
-      apply_branches.(arity) <-
-        T.Branch (tag, fv2, T.TailCall (name, T.vvars (fv2 @ aargs))) ::
-        apply_branches.(arity);
-    if arity > 1 then begin
-      let _, cargs = get_cont_def st (arity - 1) in
-      let fv3 = List.map Atom.copy fv in
-      cont_branches.(arity - 1) <-
-        T.Branch (tag, fv3, T.TailCall (name, T.vvars (fv3 @ cargs))) ::
-        cont_branches.(arity - 1);
-      for i = 2 to arity - 1 do
-        let b_name = Atom.fresh "cont_call_few_f" in
-        let _, nargs = get_cont_def st (i - 1) in
-        let k, arga = split_last nargs in
-        let ffv, tags = IMap.find tag underapplied_tags in
-        let fv4 = List.map Atom.copy ffv in
-        let oa = 1 + Array.length tags in
-        let ntag = tags.(arity - 1 - i) in
-        let argb = List.map (fun _ -> Atom.fresh "cont_call_few_arg") (0 <|> oa - arity) in
-        let ap, _ = get_apply_def st 1 in
-        cont_branches.(i - 1) <-
-          T.Branch (tag, fv4 @ argb, T.LetBlo (
-              b_name,
-              T.Con (ntag, T.vvars (fv4 @ argb @ arga)),
-              T.TailCall (ap, T.vvars [k; b_name])
-            )) :: cont_branches.(i - 1)
-      done;
-      for i = arity + 1 to max_arity + 1 do
-        let fv5 = List.map Atom.copy fv in
-        let b_name = Atom.fresh "cont_call_many_f" in
-        let _, nargs = get_cont_def st (i - 1) in
-        let arga, argb = split_args nargs (arity - 1) in
-        cont_branches.(i - 1) <-
-          T.Branch (tag, fv5, T.LetBlo (
-              b_name,
-              T.Con (cont_call_id.(i - arity), T.vvars argb),
-              T.TailCall (name, T.vvars (fv5 @ arga @ [b_name]))))
-          :: cont_branches.(i - 1)
-      done;
+  let add_cont_branches fname =
+    let arity, tags, _, fv = Atom.Map.find fname st.functions_tags in
+    if arity >= 3 then begin
+      for i = 1 to st.max_contcall_arity do
+        let _, cargs, _ = get_cont_def st i in
+        let h, cargs1 = split_last cargs in
+        let k, aargs = split_last cargs1 in
+        for j = 0 to arity - 3 do
+          let fv1 = List.map Atom.copy fv in
+          let extra = fv1 @
+            (List.map (fun _ -> Atom.fresh "defun_cont_extra") (0 <|> j)) in
+          cont_branches.(i) <-
+            T.Branch (tags.(j), extra,
+                      make_contcall fname j (T.vvar k) (T.vvar h)
+                        (T.vvars aargs) (T.vvars extra) st)
+            :: cont_branches.(i)
+        done
+      done
     end
   in
-  List.iter (fun (T.Fun (name, _, _), tag, fv, arity) ->
-      add_fct_branches name tag fv arity false;
-      Array.iteri (fun i tag ->
-          let nfv = List.map (fun _ -> Atom.fresh "cont_call_few_arg") (0 <|> arity - i - 2) in
-          add_fct_branches name tag (fv @ nfv) (i + 2) false
-        ) (snd (IMap.find tag underapplied_tags))
-    ) st.extracted_functions;
-  for i = 1 to max_arity - 1 do
-    let vrs = List.map (fun _ -> Atom.fresh "cont_call_many") (0 <|> i + 1) in
-    let name, _ = get_cont_def st i in
-    add_fct_branches name cont_call_id.(i) vrs 1 true
+  let add_apply_branches fname =
+    let arity, tags, name, fv = Atom.Map.find fname st.functions_tags in
+    if arity <= 1 then begin
+      let fv2 = List.map Atom.copy fv in
+      let _, aargs = get_apply_def st arity in
+      apply_branches.(arity) <-
+        T.Branch (tags.(0), fv2, T.TailCall (name, T.vvars (fv2 @ aargs)))
+          :: apply_branches.(arity)
+    end
+  in
+  Atom.Map.iter (fun fname _ -> add_cont_branches fname; add_apply_branches fname) st.extracted_functions;
+  for i = 1 to st.max_contcall_arity do
+    let _, aargs = get_apply_def st 1 in
+    let cname, cargs, tag = get_cont_def st i in
+    let cargs1 = List.map Atom.copy cargs in
+    apply_branches.(1) <-
+      T.Branch (tag, cargs1, T.TailCall (cname, T.vvars (aargs @ cargs1)))
+        :: apply_branches.(1)
   done;
   let applies = List.map (fun (arity, (name, args)) ->
       let f = Atom.fresh "apply_f" in
       T.Fun (name, f :: args, T.Swi (T.vvar f, apply_branches.(arity), None))
     ) (IMap.bindings st.apply_defs) in
-  let conts = List.map (fun (arity, (name, args)) ->
+  let conts = List.map (fun (arity, (name, args, _)) ->
       let f = Atom.fresh "cont_f" in
       T.Fun (name, f :: args, T.Swi (T.vvar f, cont_branches.(arity), None))
     ) (IMap.bindings st.cont_defs) in
-  T.Prog (conts @ applies @ (List.map (fun (f, _, _, _) -> f) st.extracted_functions), nt)
+  T.Prog (conts @ applies @ (List.map (fun (_, f) -> f) (Atom.Map.bindings st.extracted_functions)), nt)

@@ -70,8 +70,13 @@ decl_:
     { DNewType (x, l) }
 | TYPE x = IDENT EQ t = ty
     { DTypeSynonym (x, t) }
+(*
 | EFFECT x = IDENT EQ l = left_flexible_list(BAR, placed(effect_decl_case_))
     { DEffect (x, l) }
+*)
+| EFFECT x = IDENT EQ e = placed(effect_decl_case_)
+    { DEffect (x, e) }
+
 
 effect_decl_case_:
 | c = UIDENT COLON t = ty

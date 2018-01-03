@@ -13,22 +13,26 @@ let continuation_to_fct (t : T.value) (body : T.value -> T.term) : T.term =
   lambda_let (T.Lam (T.NoSelf, [k; cnt], T.TailCall (t, [T.vvar k]))) body
 
 let fct_to_continuation (t : T.value) (body : T.value -> T.term) : T.term =
-  let cont_arg = Atom.fresh "cps_cont_arg" in
+(*  let cont_arg = Atom.fresh "cps_cont_arg" in
   let ex_arg = Atom.fresh "cps_ex_arg" in
   lambda_let (T.Lam (T.NoSelf, [cont_arg],
     lambda_let (T.Lam (T.NoSelf, [ex_arg], T.Exit)) (fun ex ->
       T.ContCall (t, ex, [T.vvar cont_arg])))) body
+*)
+  assert false
 
-let rec cps (t : S.term) (k : T.value) : T.term =
+let rec cps (t : S.term) (e : T.value) (k : T.value) : T.term =
   match t with
   | S.Var v -> T.TailCall (k, [T.vvar v])
   | S.Lam (self, var, body) ->
     let cont = Atom.fresh "cps_cont" in
+    let handler = Atom.fresh "cps_handler" in
     let args, body1 = cps_lam body [var] in
-    lambda_let (T.Lam (self, List.rev (cont :: args), cps body1 (T.vvar cont)))
+    lambda_let (T.Lam (self, List.rev (handler :: cont :: args),
+                       cps body1 (T.vvar handler) (T.vvar cont)))
       (fun f -> T.TailCall (k, [f]))
   | S.App (t1, t2) ->
-    cps_app t k []
+    cps_app t e k []
   | S.Lit n -> T.TailCall (k, [T.VLit n])
   | S.BinOp (t1, op, t2) ->
     let bl = Atom.fresh "cps_bl" in
@@ -36,59 +40,66 @@ let rec cps (t : S.term) (k : T.value) : T.term =
     let w =
       lambda_let (T.Lam (T.NoSelf, [br],
                          T.TailCall (k, [T.VBinOp (T.vvar bl, op, T.vvar br)])))
-        (cps t2) in
-    lambda_let (T.Lam (T.NoSelf, [bl], w)) (cps t1)
+        (cps t2 e) in
+    lambda_let (T.Lam (T.NoSelf, [bl], w)) (cps t1 e)
   | S.Print t ->
     let pr = Atom.fresh "cps_pr" in
     lambda_let (T.Lam (T.NoSelf, [pr],
                        T.Print (T.vvar pr, T.TailCall (k, [T.vvar pr]))))
-      (cps t)
+      (cps t e)
   | S.CallCc t ->
+    (* TODO: get rid of callcc *)
     let f = Atom.fresh "cps_callcc" in
     lambda_let (T.Lam (T.NoSelf, [f],
       continuation_to_fct k (fun kf ->
-        T.ContCall (T.vvar f, k, [kf]))
-    )) (cps t)
+        T.ContCall (T.vvar f, k, e, [kf]))
+    )) (cps t e)
   | S.Let (x, t1, t2) ->
-    lambda_let (T.Lam (T.NoSelf, [x], cps t2 k)) (cps t1)
+    lambda_let (T.Lam (T.NoSelf, [x], cps t2 e k)) (cps t1 e)
   | S.IfZero (t1, t2, t3) ->
     let cond = Atom.fresh "cps_if" in
     lambda_let (T.Lam (T.NoSelf, [cond],
-                       T.IfZero (T.vvar cond, cps t2 k, cps t3 k))) (cps t1)
+                       T.IfZero (T.vvar cond, cps t2 e k, cps t3 e k))) (cps t1 e)
   | S.Match (t, pl) ->
     let match_var = Atom.fresh "cps_match_var" in
     lambda_let (T.Lam (T.NoSelf, [match_var],
       lambda_let (T.Lam (T.NoSelf, [], T.Exit)) (fun handle ->
         cps_match [T.vvar match_var]
-          (List.map (fun (p, t) -> match p with S.Pattern p -> [p], cps t k | S.Effect _ -> assert false) pl) handle)
-    )) (cps t)
+          (List.map (fun (p, t) -> match p with S.Pattern p -> [p], cps t e k | S.Effect _ -> assert false) pl) handle)
+    )) (cps t e)
   | S.Tuple l ->
     let vars = List.map (fun _ -> Atom.fresh "cps_tuple_var") l in
     let tpl = Atom.fresh "cps_tuple" in
     List.fold_left2 (fun k t name ->
-      lambda_let (T.Lam (T.NoSelf, [name], k)) (cps t)
+      lambda_let (T.Lam (T.NoSelf, [name], k)) (cps t e)
       ) (T.LetBlo (tpl, T.Tuple (T.vvars vars),
                    T.TailCall (k, [T.vvar tpl]))) l vars
-  | S.Constructor ((_, tag), l) ->
+  | S.Constructor ((_, tag, is_effect), l) ->
     let vars = List.map (fun _ -> Atom.fresh "cps_constructor_var") l in
     let ctr = Atom.fresh "cps_constructor" in
+    let nk =
+      if is_effect then
+        assert false
+      else
+        (T.LetBlo (ctr, T.Constructor (tag, T.vvars vars),
+                   T.TailCall (k, [T.vvar ctr])))
+    in
     List.fold_left2 (fun k t name ->
-      lambda_let (T.Lam (T.NoSelf, [name], k)) (cps t)
-      ) (T.LetBlo (ctr, T.Constructor (tag, T.vvars vars),
-                   T.TailCall (k, [T.vvar ctr]))) l vars
+      lambda_let (T.Lam (T.NoSelf, [name], k)) (cps t e)
+      ) nk l vars
 
 
-and cps_app (t : S.term) (k : T.value) (args : T.value list) : T.term =
+and cps_app (t : S.term) (e : T.value) (k : T.value) (args : T.value list) : T.term =
   match t with
   | S.App (t1, t2) ->
     let appr = Atom.fresh "cps_appr" in
     lambda_let (T.Lam (T.NoSelf, [appr],
-      cps_app t1 k (T.vvar appr :: args)
-                      )) (cps t2)
+      cps_app t1 e k (T.vvar appr :: args)
+                      )) (cps t2 e)
   | _ ->
     let appl = Atom.fresh "cps_appl" in
     lambda_let (T.Lam (T.NoSelf, [appl],
-      T.ContCall (T.vvar appl, k, args))) (cps t)
+      T.ContCall (T.vvar appl, k, e, args))) (cps t e)
 
 and cps_lam (t : S.term) (args : T.variable list) : T.variable list * S.term =
   match t with
@@ -127,7 +138,7 @@ and remove_top_vars matching v =
 and remove_constructors matching =
   let tbl = Hashtbl.create 17 in
   List.iter (fun z -> match z with
-      | S.PConstructor ((_, tag), l1) :: l2, t ->
+      | S.PConstructor ((_, tag, false), l1) :: l2, t ->
         let vars, patterns =
           try Hashtbl.find tbl tag
           with Not_found ->
@@ -182,4 +193,5 @@ and cps_match
         )
 
 let cps_term (t : S.term) : T.term =
-  lambda_let (T.Lam (T.NoSelf, [Atom.fresh "cps_result"], T.Exit)) (cps t)
+  lambda_let (T.Lam (T.NoSelf, [Atom.fresh "cps_effect"], T.Exit)) (fun e ->
+    lambda_let (T.Lam (T.NoSelf, [Atom.fresh "cps_result"], T.Exit)) (cps t e))

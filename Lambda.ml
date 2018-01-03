@@ -25,7 +25,7 @@ and tname =
   Atom.atom
 
 and constructor =
-  Atom.atom * int
+  Atom.atom * int * bool
 
  (* Every lambda-abstraction is marked recursive or nonrecursive. Whereas a
    nonrecursive lambda-abstraction [fun x -> t] binds one variable [x], a
