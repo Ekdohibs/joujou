@@ -79,3 +79,23 @@ let _ = print (test1 f)
 let _ = print_list (test2 f)
 let _ = print_list (test3 f)
 let _ = print_list (test4 f)
+
+effect get = Get : int
+effect set = Set : int -> int
+
+let test_state = fun x ->
+  let _ = print Get in
+  let _ = Set 42 in
+  let _ = print Get in
+  let _ = print Get in
+  let _ = Set 12 in
+  let _ = Set 17 in
+  print Get
+
+let run_state = fun f ->
+  match f 0 with
+  | x -> fun s -> x
+  | effect Get k -> fun s -> k s s
+  | effect Set s k -> fun _ -> k 0 s
+
+let _ = run_state test_state 23
