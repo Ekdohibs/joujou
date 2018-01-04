@@ -64,7 +64,7 @@ and pattern =
 
 and pattern_or_effect =
   | Pattern of pattern
-  | Effect of constructor * pattern option * variable
+  | Effect of pattern * variable
 
 and typ =
   | Tident of tname

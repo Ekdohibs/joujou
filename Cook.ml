@@ -95,7 +95,7 @@ let check_unify_msg msg place env t1 t2 =
     | UnificationFailure (ty1, ty2) ->
       error place msg (T.show_typ (Ty.canon t1)) (T.show_typ (Ty.canon t2)) (T.show_typ (Ty.canon ty1)) (T.show_typ (Ty.canon ty2))
 
-let check_unify = check_unify_msg "This expression has type %s but was expected of type %s@.The type %s is incompatible with the type %s"
+let check_unify = check_unify_msg "This expression has type %s but was expected of type %s\nThe type %s is incompatible with the type %s"
 
 let recompute_fvars fv =
   (* If the definitions of some variables changed, then the free variables
@@ -222,12 +222,18 @@ let rec cook_term env { S.place ; S.value } =
     let args = List.map (fun t -> t.S.place, cook_term env t) args in
     List.iter2
       (fun (place, (ty, _)) ety -> check_unify place env ty ety) args cargs;
-    T.Tident tname, T.Constructor ((catom, ctag, is_effect), List.map (fun (_, (_, t)) -> t) args)
+    let nt =
+      if is_effect then
+        let (_, nt, _) = Atom.Map.find tname env.effect_defs in nt
+      else
+        T.Tident tname
+    in
+    nt, T.Constructor ((catom, ctag, is_effect), List.map (fun (_, (_, t)) -> t) args)
   | S.Match (t, l) ->
     let ty, nt = cook_term env t in
     let rty = T.Tvar (TV.create ()) in
     let nl = List.map (fun (p, t1) ->
-      let np, dv = cook_pattern_or_effect env ty p in
+      let np, dv = cook_pattern_or_effect env ty rty p in
       let nenv = Smap.fold (fun x (a, t) env -> add_bound x a t env) dv env in
       let ty1, nt1 = cook_term nenv t1 in
       check_unify t1.S.place env ty1 rty;
@@ -235,11 +241,35 @@ let rec cook_term env { S.place ; S.value } =
     ) l in
     rty, T.Match (nt, nl)
 
-and cook_pattern_or_effect env ty = function
+and cook_pattern_or_effect env ty rty = function
   | S.Pattern p ->
     let p, dv = cook_pattern env Smap.empty ty p in
     T.Pattern p, dv
-  | S.Effect (c, p, k) -> assert false
+  | S.Effect ({ S.value = c ; S.place }, p, k) ->
+    let catom =
+      try Smap.find c env.constructor_bindings
+      with Not_found -> error place "Unbound constructor: %s" c
+    in
+    let ename, _, ctag, is_effect = Atom.Map.find catom env.constructor_defs in
+    let ty1, ty2, _ = Atom.Map.find ename env.effect_defs in
+    if not is_effect then
+      error place "This constructor is a value constructor, not an effect constructor";
+    let np, dv =
+      match p, ty1 with
+      | None, None -> T.PConstructor ((catom, ctag, true), []), Smap.empty
+      | Some p, Some ty1 ->
+        let np, dv = cook_pattern env Smap.empty ty1 p in
+        if Smap.mem k dv then
+          error p.S.place "The variable %s is already bound in this matching" k;
+        T.PConstructor ((catom, ctag, true), [np]), dv
+      | None, Some _ ->
+        error place "The effect constructor %s expects 1 argument, but is applied here to 0 arguments" c
+      | Some _, None ->
+        error place "The effect constructor %s expects 0 arguments, but is applied here to 1 argument" c
+    in
+    let kty = T.Tarrow (ty2, rty) in
+    let kv = Atom.fresh k in
+    T.Effect (np, kv), (Smap.add k (kv, kty) dv)
 
 and cook_pattern env mapped_vars ty { S.value ; S.place } =
   match value with
@@ -259,14 +289,14 @@ and cook_pattern env mapped_vars ty { S.value ; S.place } =
         (if not !disable_type_checking then
           try unify env ty1 ty2 with
           | UnificationFailure (ty1_, ty2_) ->
-            error place "The variable %s on the left-hand side of this | pattern has type %s but on the right-hand side it has type %s@.The type %s is incompatible with the type %s" x (T.show_typ (Ty.canon ty1)) (T.show_typ (Ty.canon ty2)) (T.show_typ (Ty.canon ty1_)) (T.show_typ (Ty.canon ty2_)));
+            error place "The variable %s on the left-hand side of this | pattern has type %s but on the right-hand side it has type %s\nThe type %s is incompatible with the type %s" x (T.show_typ (Ty.canon ty1)) (T.show_typ (Ty.canon ty2)) (T.show_typ (Ty.canon ty1_)) (T.show_typ (Ty.canon ty2_)));
         Some (a1, ty1)
       | _ -> error place "Variable %s must appear on both sides of this | pattern" x
     ) dv1 dv2 in
     np, dv
   | S.PTuple l ->
     let tvs = List.map (fun _ -> T.Tvar (TV.create ())) l in
-    check_unify_msg "This pattern matches values of type %s but a pattern was expected which matches values of type %s@.The type %s is incompatible with the type %s" place env (T.Tproduct tvs) ty;
+    check_unify_msg "This pattern matches values of type %s but a pattern was expected which matches values of type %s\nThe type %s is incompatible with the type %s" place env (T.Tproduct tvs) ty;
     let nl = List.map2 (cook_pattern env mapped_vars) tvs l in
     let np = T.PTuple (List.map fst nl) in
     let dv = List.fold_left (fun dv (_, dvi) ->
@@ -287,7 +317,7 @@ and cook_pattern env mapped_vars ty { S.value ; S.place } =
     let tname, cargs, ctag, is_effect = Atom.Map.find catom env.constructor_defs in
     if is_effect then
       error place "This constructor is an effect constructor, not a value constructor";
-    check_unify_msg "This pattern matches values of type %s but a pattern was expected which matches values of type %s@.The type %s is incompatible with the type %s" place env (T.Tident tname) ty;
+    check_unify_msg "This pattern matches values of type %s but a pattern was expected which matches values of type %s\nThe type %s is incompatible with the type %s" place env (T.Tident tname) ty;
     let n = List.length cargs in
     let args =
       match n, p with

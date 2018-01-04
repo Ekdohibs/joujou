@@ -170,9 +170,9 @@ match_cases_:
 match_case:
 | p = pattern ARROW t = any_term
     { (Pattern p, t) }
-| EFFECT c = UIDENT p = pattern k = IDENT ARROW t = any_term
+| EFFECT c = placed(UIDENT) p = pattern k = IDENT ARROW t = any_term
     { (Effect (c, Some p, k), t) }
-| EFFECT c = UIDENT k = IDENT ARROW t = any_term
+| EFFECT c = placed(UIDENT) k = IDENT ARROW t = any_term
     { (Effect (c, None, k), t) }
 
 %inline pattern:

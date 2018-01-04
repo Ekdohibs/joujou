@@ -56,7 +56,7 @@ and pattern =
 
 and pattern_or_effect =
   | Pattern of pattern
-  | Effect of constructor * pattern option * variable
+  | Effect of constructor placed * pattern option * variable
 
 and ty_ =
   | TVar of variable
