@@ -112,30 +112,34 @@ let from_int v : T.expr =
 
 (* The translation of values. *)
 
-let finish_op = function
+let finish_op op v1 v2 =
+  match op with
   | S.OpAdd ->
-      T.K.Add
+    T.Op2 (T.K.Sub, T.Op2 (T.K.Add, v1, v2), iconst 1)
   | S.OpSub ->
-      T.K.Sub
+    T.Op2 (T.K.Add, T.Op2 (T.K.Sub, v1, v2), iconst 1)
   | S.OpMul ->
-      T.K.Mult
+    T.Op2 (T.K.Add, T.Op2 (T.K.Mult,
+                           T.Op2 (T.K.Sub, v1, iconst 1),
+                           T.Op2 (T.K.BShiftR, v2, iconst 1)
+                          ), iconst 1)
   | S.OpDiv ->
-      T.K.Div
+    T.Op2 (T.K.Add, T.Op2 (T.K.BShiftL,
+                           T.Op2 (T.K.Div,
+                                  T.Op2 (T.K.Sub, v1, iconst 1),
+                                  T.Op2 (T.K.Sub, v2, iconst 1)),
+                           iconst 1), iconst 1)
 
 let rec finish_value (v : S.value) : T.expr =
   match v with
   | S.VVar x ->
      evar x
   | S.VLit i ->
-     from_int (iconst i)
+     from_int (iconst (2 * i + 1))
   | S.VBinOp (v1, op, v2) ->
-     from_int (
-       T.Op2 (
-         finish_op op,
-         to_int (finish_value v1),
-         to_int (finish_value v2)
-       )
-     )
+    from_int (finish_op op
+                (to_int (finish_value v1))
+                (to_int (finish_value v2)))
 
 let finish_values vs =
   List.map finish_value vs
@@ -214,7 +218,8 @@ let rec finish_term (t : S.term) : C.stmt =
     T.Return (Some (ecall (evar f) (finish_values vs)))
   | S.Print (v, t) ->
     T.Compound [
-      scall printf [ T.Literal "%d\\n"; to_int (finish_value v) ];
+      scall printf [ T.Literal "%d\\n";
+                     T.Op2 (T.K.BShiftR, to_int (finish_value v), iconst 1) ];
       finish_term t
     ]
   | S.LetVal (x, v1, t2) ->
@@ -235,7 +240,8 @@ let rec finish_term (t : S.term) : C.stmt =
       match t with None -> default | Some t -> finish_term t
     )
   | S.IfZero (v, t1, t2) ->
-    T.IfElse (to_int (finish_value v), finish_term t2, finish_term t1)
+    T.IfElse (T.Op2 (T.K.Sub, to_int (finish_value v), iconst 1),
+              finish_term t2, finish_term t1)
 
 and default : T.stmt =
   (* This default [switch] branch should never be taken. *)
