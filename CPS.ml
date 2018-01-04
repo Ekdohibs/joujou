@@ -46,7 +46,7 @@ let rec cps (t : S.term) (ks : T.value) : T.term =
     block_let (T.Lam (self, List.rev (conts :: args),
                       cps body1 (T.vvar conts)))
       (apply_cont ks)
-  | S.App (t1, t2) ->
+  | S.App (_, _) ->
     destruct_cons ks (fun k ks ->
       cps_app t k ks [])
   | S.BinOp (t1, op, t2) ->
@@ -92,8 +92,7 @@ let rec cps (t : S.term) (ks : T.value) : T.term =
     if effects = [] then
       cont_let (make_cont do_match) ks (cps t)
     else
-      let hret = make_cont (fun v ks -> destruct_cons ks (fun h ks -> do_match v ks)) in
-      (* FIXME *)
+      let hret = make_cont (fun v ks -> destruct_cons ks (fun _ ks -> do_match v ks)) in
       let heffect = make_handler (fun e r ks ->
         let forward = destruct_cons ks (fun k1 ks ->
           destruct_cons ks (fun h1 ks ->

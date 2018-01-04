@@ -130,6 +130,7 @@ let add_gen id typ env =
   } in
   (nenv, a)
 
+(*
 let print_env ff env =
   Format.fprintf ff "-----@.";
   Smap.iter (fun x ({vars ; typ}, _) ->
@@ -138,6 +139,7 @@ let print_env ff env =
       Format.fprintf ff ". %s@." (T.show_typ (Ty.canon typ))
     ) env;
   Format.fprintf ff "-----@."
+*)
 
 let refresh vars t =
   let module VarMap = Map.Make(TV) in

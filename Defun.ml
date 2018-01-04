@@ -167,8 +167,7 @@ let rec defun (t : S.term) (st : defun_state) : T.term =
   | S.LetVal (x, v, t) ->
     defun_value st (fun v -> T.LetVal (x, v, defun t st)) v
   | S.LetBlo (f, (S.Lam (self, args, body) as blo), t) ->
-    Format.eprintf "%s@." (S.show_variable f);
-    let arity, tags, name, _ = Atom.Map.find f st.functions_tags in
+    let _, tags, name, _ = Atom.Map.find f st.functions_tags in
     let fv = Atom.Set.(elements
        (diff (S.fv_block blo) (Atom.Map.domain st.toplevel_functions))) in
     let fv1 = List.map Atom.copy fv in
