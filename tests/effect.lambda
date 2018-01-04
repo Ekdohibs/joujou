@@ -31,3 +31,51 @@ let rec print_list = fun l ->
 
 let _ = print (run_zero f)
 let _ = print_list (run_all f)
+
+effect choose2 = Choose2 : int
+let choose2 = fun a -> fun b ->
+  ifzero Choose2 then a else b
+
+let f = fun x ->
+  let u = choose 5 12 in
+  let v = choose2 3 17 in
+  u + v
+
+let test1 = fun f ->
+  match f 0 with
+  | x -> x
+  | effect Choose k -> k 0
+  | effect Choose2 k -> k 1
+
+let test2 = fun f ->
+  match
+    (match f 0 with
+     | x -> x
+     | effect Choose k -> k 0
+    ) with
+  | x -> Cons (x, Nil)
+  | effect Choose2 k -> append (k 0) (k 1)
+
+let test3 = fun f ->
+  match
+    (match f 0 with
+     | x -> x
+     | effect Choose2 k -> k 0
+    ) with
+  | x -> Cons (x, Nil)
+  | effect Choose k -> append (k 0) (k 1)
+
+let test4 = fun f ->
+  match
+    (match f 0 with
+     | x -> Cons (x, Nil)
+     | effect Choose k -> append (k 0) (k 1)
+    ) with
+  | x -> x
+  | effect Choose2 k -> k 1
+
+
+let _ = print (test1 f)
+let _ = print_list (test2 f)
+let _ = print_list (test3 f)
+let _ = print_list (test4 f)

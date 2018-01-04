@@ -96,9 +96,19 @@ let rec cps (t : S.term) (ks : T.value) : T.term =
     else
       let hret = make_cont (fun v ks -> destruct_cons ks (fun h ks -> do_match v ks)) in
       (* FIXME *)
-      let forward = make_statichandler T.Exit in
       let heffect = make_handler (fun e r ks ->
-        block_let forward (fun handle ->
+        let forward = destruct_cons ks (fun k1 ks ->
+          destruct_cons ks (fun h1 ks ->
+            block_let (make_cont (fun x ks ->
+              block_let (T.Tuple [h1; ks]) (fun ks ->
+                block_let (T.Tuple [k1; ks]) (fun ks -> T.TailCall (r, [x; ks]))
+              )
+              )) (fun r1 ->
+              T.TailCall (h1, [e; r1; ks])
+            )
+          )
+        ) in
+        block_let (make_statichandler forward) (fun handle ->
           cps_match [e] (List.map (fun (p, r1, t) ->
             [p], T.LetVal (r1, r, cps t ks)) effects) handle
           )

@@ -1,3 +1,12 @@
-let yin = (fun cc -> let _ = print 1 in cc) (callcc (fun c -> c)) in
-let yang = (fun cc -> let _ = print 0 in cc) (callcc (fun c -> c)) in
+#pragma disable_type_checking
+type empty =
+(* Callcc can't be typed properly *)
+effect call_cc = Callcc : empty -> empty
+;;
+
+match (
+let yin = (fun cc -> let _ = print 1 in cc) (Callcc (fun c -> c)) in
+let yang = (fun cc -> let _ = print 0 in cc) (Callcc (fun c -> c)) in
 yin yang
+) with
+  | effect Callcc f k -> k (f k)
