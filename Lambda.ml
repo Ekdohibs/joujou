@@ -51,7 +51,6 @@ and term =
   | Print of term
   | Let of variable * term * term
   | IfZero of term * term * term
-  | CallCc of term
   | Tuple of term list
   | Constructor of constructor * term list
   | Match of term * (pattern_or_effect * term) list

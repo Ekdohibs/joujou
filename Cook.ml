@@ -179,12 +179,6 @@ let rec cook_term env { S.place ; S.value } =
     let ty, nt = cook_term env t in
     check_unify t.S.place env ty builtin_int;
     builtin_int, T.Print nt
-  | S.CallCc t ->
-    let _, t = cook_term env t in
-    let tv = T.Tvar (TV.create ()) in
-    if not !disable_type_checking then
-      error place "Please disable type-checking if you want to use callcc";
-    tv, T.CallCc t
   | S.Let (recursive, x, t1, t2) ->
     let env, x, nt1 = cook_let env recursive x t1 in
     let ty2, nt2 = cook_term env t2 in

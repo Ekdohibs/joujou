@@ -33,7 +33,6 @@ and term_ =
   | Print of term
   | Let of recursive * variable * term * term
   | IfZero of term * term * term
-  | CallCc of term
   | Match of term * (pattern_or_effect * term) list
   | Tuple of term list
   | Constructor of constructor * term option

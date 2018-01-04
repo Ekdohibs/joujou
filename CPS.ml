@@ -61,8 +61,6 @@ let rec cps (t : S.term) (ks : T.value) : T.term =
       cont_let (make_cont (fun pr ks ->
         T.Print (pr, apply_cont_p k ks pr)
       )) ks (cps t))
-  | S.CallCc t ->
-    assert false
   | S.Let (x, t1, t2) ->
     let cks = Atom.fresh "cps_cont_ks" in
     destruct_cons ks (fun k ks ->
@@ -121,33 +119,6 @@ let rec cps (t : S.term) (ks : T.value) : T.term =
           )
         )
       )
-        (*    lambda_let (T.Lam (T.NoSelf, [match_var],
-      lambda_let (T.Lam (T.NoSelf, [], T.Exit)) (fun handle ->
-        cps_match [T.vvar match_var]
-          (List.map (fun (p, t) -> [p], cps t e k) patterns) handle)
-    )) (fun ek -> 
-      let ehandler =
-        if effects = [] then
-          fun w -> w e
-        else
-          let e_var = Atom.fresh "cps_e_var" in
-          let k_var = Atom.fresh "cps_k_var" in
-          let handler_self = Atom.fresh "cps_handler_self" in
-          lambda_let (T.Lam (T.Self handler_self, [k_var; e_var],
-            lambda_let (T.Lam (T.NoSelf, [],
-               T.TailCall (e, T.vvars [k_var; e_var]))) (fun match_handler ->
-                 (* FIXME: fix match handler *)
-                 cps_match [T.vvar e_var]
-                   (List.map (fun (p, ik, t) -> [p],
-                      let e_var_1 = Atom.fresh "cps_e_var" in
-                      let k_var_1 = Atom.fresh "cps_k_var" in
-                      let x_var_1 = Atom.fresh "cps_x_var" in
-                      T.LetBlo (ik, T.Lam (T.NoSelf, [x_var_1; k_var_1; e_var_1], ), cps t e k))
-                    effects) match_handler
-               )
-          ))
-      in
-      ehandler (fun ee -> cps t ee ek)) *)
   | S.Tuple l ->
     destruct_cons ks (fun k ks ->
       let vars = List.map (fun _ -> Atom.fresh "cps_tuple_var") l in

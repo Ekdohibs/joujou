@@ -6,7 +6,6 @@ open Parser
 open RawLambda
 
 let kw = [
-  "callcc", CALLCC ;
   "effect", EFFECT ;
   "else", ELSE ;
   "fun", FUN ;

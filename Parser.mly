@@ -1,7 +1,7 @@
 %token<string> IDENT
 %token<string> UIDENT
 %token<int> INTLITERAL
-%token FUN IN LET PRINT REC CALLCC
+%token FUN IN LET PRINT REC
 %token IFZERO THEN ELSE
 %token ARROW EQ LPAREN RPAREN BAR COMMA STAR SEMISEMI COLON
 %token TYPE OF EFFECT
@@ -126,8 +126,6 @@ application_term_:
     { App (t1, t2) }
 | PRINT t2 = atomic_term
     { Print t2 }
-| CALLCC t2 = atomic_term
-    { CallCc t2 }
 | x = UIDENT t2 = application_term
     { Constructor (x, Some t2) }
 
