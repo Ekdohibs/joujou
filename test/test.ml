@@ -90,11 +90,11 @@ let good_slash filename =
 let joujou =
   src ^ "/joujou"
 
-let gcc =
+let cc =
   if debug then
-    sprintf "gcc -O0 -g -I %s" src
+    sprintf "clang -O0 -g -I %s" src
   else
-    sprintf "gcc -O2 -I %s" src
+    sprintf "clang -O2 -I %s" src
 
 (* -------------------------------------------------------------------------- *)
 
@@ -172,7 +172,7 @@ let check_expected directory id result expected =
 (*
   Conventions:
   The file %.c       stores the output of joujou.
-  The file %.exe     is the compiled program produced by gcc.
+  The file %.exe     is the compiled program produced by the compiler.
   The file %.out     stores the output of the compiled program.
   The file %.exp     stores the expected output.
   The file %.err     stores error output (at several stages).
@@ -207,7 +207,7 @@ let process_positive_test (base : string) : unit =
   let errors = base ^ ".err" in
   let cmd = sep (
     "cd" :: good :: "&&" ::
-    gcc :: c :: "-o" :: binary :: sprintf "2>%s" errors :: []
+    cc :: c :: "-o" :: binary :: sprintf "2>%s" errors :: []
   ) in
   if command cmd <> 0 then
     fail base "The C compiler rejects the C file.\n\
