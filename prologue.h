@@ -1,3 +1,5 @@
+#include <stdint.h>
+
 /* A forward declaration of [block] -- see below. */
 
 struct block;
@@ -29,7 +31,7 @@ typedef union {
 struct block {
 
   /* Every memory block begins with an integer tag. */
-  int tag;
+  uint64_t tag;
 
   /* Then, we have a sequence of fields, whose number depends on the tag.
      This idiom is known in C99 as a flexible array member. */
@@ -41,26 +43,27 @@ struct block {
 
 /* Basic operations on memory blocks. */
 
-/* The macro [ALLOC(n)] allocates a block of [n] fields, and is used in a
-   context where an expression of type [univ] is expected. We use a C
-   "compound literal" containing a "designated initializer" to indicate
-   that we wish to choose the "pointer" side of the union. We implicitly
-   assume that the compiler inserts no padding between the "tag" and "data"
-   parts of a memory block, so [(n + 1) * sizeof(univ)] is enough space to
-   hold a block of [n] fields. */
+/* The macro [ALLOC(n, tag)] allocates a block of [n] fields, with tag [tag],
+	 and is used in a context where an expression of type [univ] is expected. */
 
-#define ALLOC(n) \
-  (univ) { .pointer = malloc((n + 1) * sizeof(univ)) }
+inline univ make_block(size_t n, uint32_t tag) {
+	struct block* data = malloc(sizeof(uint64_t) + n * sizeof(univ));
+	data->tag = (((uint64_t) n) << 21) | (tag << 1) | 1;
+	return (univ) { .pointer = data };
+}
+
+#define ALLOC(n, tag)	\
+  (make_block((n), (tag)))
 
 /* In the following macros, [u] has type [univ], so [u.pointer] has type
    [struct block] and is (or should be) the address of a memory block.
    [i] is a field number; the numbering of fields is 0-based. */
 
 #define GET_TAG(u) \
-  (u.pointer->tag)
+  (((u).pointer->tag >> 1) & 0xfffff)
 
-#define SET_TAG(u,t) \
-  (u.pointer->tag = t)
+#define GET_SIZE(u) \
+  ((u).pointer->tag >> 21)
 
 #define GET_FIELD(u,i) \
   (u.pointer->data[i])

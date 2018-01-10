@@ -32,6 +32,10 @@ let block_num_fields b =
   | S.Con (_, vs) ->
       List.length vs
 
+let block_tag b =
+  match b with
+  | S.Con (tag, _) -> tag
+
 (* -------------------------------------------------------------------------- *)
 
 (* A simple-minded way of ensuring that every atom is printed as a
@@ -149,17 +153,14 @@ let finish_values vs =
 (* A macro for allocating a memory block. *)
 
 let alloc b : T.expr =
-  T.Call (T.Name "ALLOC", [ iconst (block_num_fields b) ])
+  T.Call (T.Name "ALLOC", [ iconst (block_num_fields b) ; iconst (block_tag b) ])
 
 (* -------------------------------------------------------------------------- *)
 
-(* Macros for reading and initializing the tag of a memory block. *)
+(* Macros for reading the tag of a memory block. *)
 
 let read_tag (v : S.value) : T.expr =
   macro "GET_TAG" [ finish_value v ]
-
-let set_tag (x : S.variable) (tag : S.tag) : T.stmt =
-  T.Expr (macro "SET_TAG" [ evar x; iconst tag ])
 
 (* -------------------------------------------------------------------------- *)
 
@@ -189,9 +190,8 @@ let set_field x i (v : S.value) : T.stmt =
 
 let init_block (x : S.variable) (b : S.block) : T.stmt list =
   match b with
-  | S.Con (tag, vs) ->
+  | S.Con (_, vs) ->
       T.Comment "Initializing a memory block:" ::
-      set_tag x tag ::
       List.mapi (set_field x) vs
 
 (* -------------------------------------------------------------------------- *)
