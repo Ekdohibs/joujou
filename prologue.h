@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include <assert.h>
 
-#define GC_DEBUG_LEVEL 1
+#define GC_DEBUG_LEVEL 0
 
 /* A forward declaration of [block] -- see below. */
 

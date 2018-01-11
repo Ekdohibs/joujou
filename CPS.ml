@@ -7,14 +7,6 @@ let block_let (blo : T.block) (body : T.value -> T.term) : T.term =
   let f = Atom.fresh "cps_block_let" in
   T.LetBlo (f, blo, body (T.vvar f))
 
-let cont_let (f : T.block) (ks : T.value) (body : T.value -> T.term) : T.term =
-  block_let f (fun ff -> block_let (T.Tuple [ff; ks]) body)
-
-let make_cont (body : T.value -> T.value -> T.term) : T.block =
-  let cont_var = Atom.fresh "cps_cont_var" in
-  let cont_ks = Atom.fresh "cps_cont_ks" in
-  T.Lam (T.NoSelf, [cont_var; cont_ks], body (T.vvar cont_var) (T.vvar cont_ks))
-
 let make_handler (body : T.value -> T.value -> T.value -> T.term) : T.block =
   let handle_var = Atom.fresh "cps_handler_var" in
   let handle_res = Atom.fresh "cps_handler_res" in
@@ -25,18 +17,46 @@ let make_handler (body : T.value -> T.value -> T.value -> T.term) : T.block =
 let make_statichandler (body : T.term) : T.block =
   T.Lam (T.NoSelf, [], body)
 
-let destruct_cons (ks : T.value) (body : T.value -> T.value -> T.term) : T.term =
+let dynamic_destruct_cons (ks : T.value) (body : T.value -> T.value -> T.term) : T.term =
   let hd = Atom.fresh "cps_ks_hd" in
   let tl = Atom.fresh "cps_ks_tl" in
   T.DestructTuple (ks, [hd; tl], body (T.vvar hd) (T.vvar tl))
 
-let apply_cont_p (k : T.value) (ks : T.value) (t : T.value) : T.term =
-  T.TailCall (k, [t; ks])
+let lift (x : T.value) (body : T.value -> T.term) : T.term =
+  body x
 
-let apply_cont (ks : T.value) (t : T.value) : T.term =
-  destruct_cons ks (fun hd tl -> apply_cont_p hd tl t)
+type static_list =
+  | Static_cons of ((T.value -> T.term) -> T.term) * static_list
+  | Reflect of ((T.value -> T.term) -> T.term)
 
-let rec cps (t : S.term) (ks : T.value) : T.term =
+let cont_let (f : T.block) (ks : static_list) (body : static_list -> T.term) : T.term =
+  body (Static_cons (block_let f, ks))
+
+let rec reify (vs : static_list) (body : T.value -> T.term) : T.term =
+  match vs with
+  | Static_cons (v, vs) ->
+    v (fun v -> reify vs (fun vs -> block_let (T.Tuple [v; vs]) body))
+  | Reflect v -> v body
+
+let make_cont (body : T.value -> static_list -> T.term) : T.block =
+  let cont_var = Atom.fresh "cps_cont_var" in
+  let cont_ks = Atom.fresh "cps_cont_ks" in
+  T.Lam (T.NoSelf, [cont_var; cont_ks], body (T.vvar cont_var) (Reflect (lift (T.vvar cont_ks))))
+
+let destruct_cons (ks : static_list) (body : T.value -> static_list -> T.term) : T.term =
+  match ks with
+  | Static_cons (k, ks) ->
+    k (fun k -> body k ks)
+  | Reflect ks ->
+    ks (fun ks -> dynamic_destruct_cons ks (fun k ks -> body k (Reflect (lift ks))))
+
+let apply_cont_p (k : T.value) (ks : static_list) (t : T.value) : T.term =
+  reify ks (fun ks -> T.TailCall (k, [t; ks]))
+
+let apply_cont (ks : static_list) (t : T.value) : T.term =
+  destruct_cons ks (fun k ks -> apply_cont_p k ks t)
+
+let rec cps (t : S.term) (ks : static_list) : T.term =
   match t with
   | S.Var v -> apply_cont ks (T.vvar v)
   | S.Lit n -> apply_cont ks (T.VLit n)
@@ -44,7 +64,7 @@ let rec cps (t : S.term) (ks : T.value) : T.term =
     let conts = Atom.fresh "cps_conts" in
     let args, body1 = cps_lam body [var] in
     block_let (T.Lam (self, List.rev (conts :: args),
-                      cps body1 (T.vvar conts)))
+                      cps body1 (Reflect (lift (T.vvar conts)))))
       (apply_cont ks)
   | S.App (_, _) ->
     destruct_cons ks (fun k ks ->
@@ -64,15 +84,16 @@ let rec cps (t : S.term) (ks : T.value) : T.term =
   | S.Let (x, t1, t2) ->
     let cks = Atom.fresh "cps_cont_ks" in
     destruct_cons ks (fun k ks ->
-        cont_let (T.Lam (T.NoSelf, [x; cks],
-          block_let (T.Tuple [k; T.vvar cks]) (cps t2)))
-          ks (cps t1))
+      cont_let
+        (T.Lam (T.NoSelf, [x; cks],
+                cps t2 (Static_cons (lift k, Reflect (lift (T.vvar cks))))))
+        ks (cps t1))
   | S.IfZero (t1, t2, t3) ->
     destruct_cons ks (fun k ks ->
       cont_let (make_cont (fun cond ks ->
         T.IfZero (cond,
-                  block_let (T.Tuple [k; ks]) (cps t2),
-                  block_let (T.Tuple [k; ks]) (cps t3))
+                  cps t2 (Static_cons (lift k, ks)),
+                  cps t3 (Static_cons (lift k, ks)))
       )) ks (cps t1))
   | S.Match (t, pl) ->
     let patterns, effects = List.partition
@@ -94,30 +115,23 @@ let rec cps (t : S.term) (ks : T.value) : T.term =
     else
       let hret = make_cont (fun v ks -> destruct_cons ks (fun _ ks -> do_match v ks)) in
       let heffect = make_handler (fun e r ks ->
-        let forward = destruct_cons ks (fun k1 ks ->
-          destruct_cons ks (fun h1 ks ->
+        let forward = dynamic_destruct_cons ks (fun k1 ks ->
+          dynamic_destruct_cons ks (fun h1 ks ->
             block_let (make_cont (fun x ks ->
-              block_let (T.Tuple [h1; ks]) (fun ks ->
-                block_let (T.Tuple [k1; ks]) (fun ks -> T.TailCall (r, [x; ks]))
-              )
-              )) (fun r1 ->
+              reify (Static_cons (lift k1, Static_cons (lift h1, ks))) (fun ks ->
+                T.TailCall (r, [x; ks])
+              ))) (fun r1 ->
               T.TailCall (h1, [e; r1; ks])
             )
           )
         ) in
         block_let (make_statichandler forward) (fun handle ->
           cps_match [e] (List.map (fun (p, r1, t) ->
-            [p], T.LetVal (r1, r, cps t ks)) effects) handle
+            [p], T.LetVal (r1, r, cps t (Reflect (lift ks)))) effects) handle
           )
         )
       in
-      block_let heffect (fun heffect ->
-        block_let hret (fun hret ->
-          block_let (T.Tuple [heffect; ks]) (fun ks ->
-            block_let (T.Tuple [hret; ks]) (cps t)
-          )
-        )
-      )
+      cps t (Static_cons (block_let hret, Static_cons (block_let heffect, ks)))
   | S.Tuple l ->
     destruct_cons ks (fun k ks ->
       let vars = List.map (fun _ -> Atom.fresh "cps_tuple_var") l in
@@ -126,7 +140,7 @@ let rec cps (t : S.term) (ks : T.value) : T.term =
       in
       List.fold_left2 (fun c t name ->
         let cks = Atom.fresh "cps_tuple_ks" in
-        fun ks -> cont_let (T.Lam (T.NoSelf, [name; cks], c (T.vvar cks))) ks (cps t)
+        fun ks -> cont_let (T.Lam (T.NoSelf, [name; cks], c (Reflect (lift (T.vvar cks))))) ks (cps t)
       ) finish l vars ks)
   | S.Constructor ((_, tag, is_effect), l) ->
     destruct_cons ks (fun k ks ->
@@ -136,8 +150,8 @@ let rec cps (t : S.term) (ks : T.value) : T.term =
           block_let (T.Constructor (tag, T.vvars vars)) (fun e ->
             destruct_cons ks (fun h ks ->
               block_let (make_cont (fun x ks ->
-                block_let (T.Tuple [h; ks]) (fun ks -> apply_cont_p k ks x)
-              )) (fun w -> T.TailCall (h, [e; w; ks]))
+                apply_cont_p k (Static_cons (lift h, ks)) x
+              )) (fun w -> reify ks (fun ks -> T.TailCall (h, [e; w; ks])))
             )
           )
         else
@@ -145,10 +159,10 @@ let rec cps (t : S.term) (ks : T.value) : T.term =
       in
       List.fold_left2 (fun c t name ->
         let cks = Atom.fresh "cps_contructor_ks" in
-        fun ks -> cont_let (T.Lam (T.NoSelf, [name; cks], c (T.vvar cks))) ks (cps t)
+        fun ks -> cont_let (T.Lam (T.NoSelf, [name; cks], c (Reflect (lift (T.vvar cks))))) ks (cps t)
       ) finish l vars ks)
 
-and cps_app (t : S.term) (k : T.value) (ks : T.value) (args : T.value list) : T.term =
+and cps_app (t : S.term) (k : T.value) (ks : static_list) (args : T.value list) : T.term =
   match t with
   | S.App (t1, t2) ->
     cont_let (make_cont (fun appr ks ->
@@ -156,7 +170,7 @@ and cps_app (t : S.term) (k : T.value) (ks : T.value) (args : T.value list) : T.
     )) ks (cps t2)
   | _ ->
     cont_let (make_cont (fun appl ks ->
-        block_let (T.Tuple [k; ks]) (fun ks -> T.ContCall (appl, ks, args))))
+        reify (Static_cons (lift k, ks)) (fun ks -> T.ContCall (appl, ks, args))))
       ks (cps t)
 
 and cps_lam (t : S.term) (args : T.variable list) : T.variable list * S.term =
@@ -253,10 +267,4 @@ and cps_match
 let cps_term (t : S.term) : T.term =
   let finish = T.Lam (T.NoSelf, [Atom.fresh "cps_result_x"; Atom.fresh "cps_result_ks"], T.Exit) in
   let effect_finish = T.Lam (T.NoSelf, [Atom.fresh "cps_effect_e"; Atom.fresh "cps_effect_ks"; Atom.fresh "cps_effect_r"], T.Exit) in
-  block_let finish (fun finish ->
-    block_let effect_finish (fun effect_finish ->
-      block_let (T.Tuple [effect_finish; T.VLit 0]) (fun ks ->
-        block_let (T.Tuple [finish; ks]) (cps t)
-      )
-    )
-  )
+  cps t (Static_cons (block_let finish, Static_cons (block_let effect_finish, Reflect (lift (T.VLit 0)))))

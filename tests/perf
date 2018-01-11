@@ -1,0 +1,9 @@
+Naïve CPS (bool.c):
+81856 lines
+Total minor allocated words: 95411.
+Total promoted words: 1397.
+
+Higher order CPS (bool.c):
+24763 lines
+Total minor allocated words: 19366.
+Total promoted words: 563.
