@@ -9,7 +9,7 @@ all:
 
 test: all
 	@ $(MAKE) -C ..
-	@ ./$(TARGET) --verbosity 1
+	@ ./$(TARGET) --verbosity 1 $(TESTOPT)
 
 expected: all
 	@ $(MAKE) -C ..

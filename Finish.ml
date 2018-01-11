@@ -3,6 +3,14 @@ module S = Top
 (* The target calculus. *)
 module T = C
 
+module IMap = Map.Make(struct type t = int let compare = compare end)
+type finish_state = {
+  mutable tags0 : Atom.atom IMap.t ;
+}
+let empty_state () = {
+  tags0 = IMap.empty ;
+}
+
 (* -------------------------------------------------------------------------- *)
 
 (* [interval i j f] constructs the list [[f i; f (i + 1); ...; f (j - 1)]]. *)
@@ -63,7 +71,7 @@ let univ : T.type_spec =
 (* The type of integers. *)
 
 let int : T.type_spec =
-  T.Named "int"
+  T.Named "int64_t"
 
 (* The type [char] appears in the type of [main]. *)
 
@@ -71,7 +79,7 @@ let char : T.type_spec =
   T.Named "char"
 
 let answer : T.type_spec =
-  int
+  T.Named "int"
     (* Our functions never actually return, since they are tail recursive.
        We use [int] as their return type, since this is the return type of
        [main]. *)
@@ -150,10 +158,32 @@ let finish_values vs =
 
 (* -------------------------------------------------------------------------- *)
 
+let get_tag0 st tag =
+  try IMap.find tag st.tags0
+  with Not_found ->
+    let a = Atom.fresh ("tag0_" ^ string_of_int tag ^ "_") in
+    st.tags0 <- IMap.add tag a st.tags0;
+    a
+
 (* A macro for allocating a memory block. *)
 
-let alloc b : T.expr =
-  T.Call (T.Name "ALLOC", [ iconst (block_num_fields b) ; iconst (block_tag b) ])
+let alloc st b : T.expr =
+  if block_num_fields b = 0 then
+    let a = get_tag0 st (block_tag b) in
+    macro "FROM_POINTER" [T.Address (evar a)]
+  else
+    T.Call (T.Name "ALLOC", [ iconst (block_num_fields b) ; iconst (block_tag b) ])
+
+let rec fct_max_total_alloc (t : S.term) =
+  match t with
+  | S.Exit | S.TailCall _ -> 0
+  | S.Print (_, t) | S.LetVal (_, _, t) -> fct_max_total_alloc t
+  | S.IfZero (_, t1, t2) -> max (fct_max_total_alloc t1) (fct_max_total_alloc t2)
+  | S.LetBlo (_, b, t) -> fct_max_total_alloc t + block_num_fields b + 1
+  | S.Swi (_, l, t) ->
+    let c = match t with None -> 0 | Some t -> fct_max_total_alloc t in
+    let l = List.map (fun (S.Branch (_, _, t)) -> fct_max_total_alloc t) l in
+    List.fold_left max c l
 
 (* -------------------------------------------------------------------------- *)
 
@@ -190,6 +220,7 @@ let set_field x i (v : S.value) : T.stmt =
 
 let init_block (x : S.variable) (b : S.block) : T.stmt list =
   match b with
+  | S.Con (_, []) -> []
   | S.Con (_, vs) ->
       T.Comment "Initializing a memory block:" ::
       List.mapi (set_field x) vs
@@ -208,7 +239,7 @@ let scall f args : T.stmt =
 
 (* The translation of terms. *)
 
-let rec finish_term (t : S.term) : C.stmt =
+let rec finish_term (st : finish_state) (t : S.term) : C.stmt =
   match t with
   | S.Exit ->
     T.Compound [
@@ -218,44 +249,44 @@ let rec finish_term (t : S.term) : C.stmt =
     T.Return (Some (ecall (evar f) (finish_values vs)))
   | S.Print (v, t) ->
     T.Compound [
-      scall printf [ T.Literal "%d\\n";
+      scall printf [ T.Literal "%lld\\n";
                      T.Op2 (T.K.BShiftR, to_int (finish_value v), iconst 1) ];
-      finish_term t
+      finish_term st t
     ]
   | S.LetVal (x, v1, t2) ->
     T.Compound [
       T.DeclStmt (declare x (Some (T.InitExpr (finish_value v1))));
-      finish_term t2
+      finish_term st t2
     ]
   | S.LetBlo (x, b1, t2) ->
     T.Compound (
-      T.DeclStmt (declare x (Some (T.InitExpr (alloc b1)))) ::
+      T.DeclStmt (declare x (Some (T.InitExpr (alloc st b1)))) ::
       init_block x b1 @
-      [ finish_term t2 ]
+      [ finish_term st t2 ]
     )
   | S.Swi (v, bs, t) ->
     T.Switch (
       read_tag v,
-      finish_branches v bs,
-      match t with None -> default | Some t -> finish_term t
+      finish_branches st v bs,
+      match t with None -> default | Some t -> finish_term st t
     )
   | S.IfZero (v, t1, t2) ->
     T.IfElse (T.Op2 (T.K.Sub, to_int (finish_value v), iconst 1),
-              finish_term t2, finish_term t1)
+              finish_term st t2, finish_term st t1)
 
 and default : T.stmt =
   (* This default [switch] branch should never be taken. *)
   T.Compound [
-    scall printf [ T.Literal "Oops! A nonexistent case has been taken.\\n" ];
+    scall printf [ T.Literal "Oops! A nonexistent case has been taken (line %d).\\n" ; T.Name "__LINE__" ];
     scall exit [ iconst 42 ];
   ]
 
-and finish_branches v bs =
-  List.map (finish_branch v) bs
+and finish_branches st v bs =
+  List.map (finish_branch st v) bs
 
-and finish_branch v (S.Branch (tag, xs, t)) : T.expr * T.stmt =
+and finish_branch st v (S.Branch (tag, xs, t)) : T.expr * T.stmt =
   iconst tag,
-  T.Compound (read_fields v xs [finish_term t])
+  T.Compound (read_fields v xs [finish_term st t])
 
 (* -------------------------------------------------------------------------- *)
 
@@ -278,10 +309,10 @@ let declare_ordinary_function f xs : T.declaration =
 
 let declare_main_function : T.declaration =
   let params = [
-    int, T.Ident "argc";
+    T.Named "int", T.Ident "argc";
     char, T.Pointer (T.Pointer (T.Ident "argv"))
   ] in
-  int, None, [ T.Function (None, T.Ident "main", params), None ]
+  T.Named "int", None, [ T.Function (None, T.Ident "main", params), None ]
 
 (* -------------------------------------------------------------------------- *)
 
@@ -290,19 +321,37 @@ let declare_main_function : T.declaration =
 type decl_or_fun =
   T.declaration_or_function
 
-let define (decl : T.declaration) (t : S.term) : decl_or_fun =
+let define (decl : T.declaration) (st : finish_state) (t : S.term) : decl_or_fun =
   T.Function (
     [],    (* no comments *)
     false, (* not inlined *)
     decl,
-    T.Compound [finish_term t]
+    T.Compound [finish_term st t]
   )
 
-let define_ordinary_function (S.Fun (f, xs, t)) : decl_or_fun =
-  define (declare_ordinary_function f xs) t
+let define_ordinary_function (st : finish_state) (S.Fun (f, xs, t)) : decl_or_fun =
+  let b = fct_max_total_alloc t in
+  let chk = ecall (T.Name "gc_check_size") [iconst b] in
+  let gc_msg = scall (T.Name "gc_debug") [T.Literal "Calling gc at line %d.\\n" ; T.Name "__LINE__"] in
+  let set_num_roots = scall (T.Name "gc_set_num_roots") [iconst (List.length xs)] in
+  let save_vars = List.mapi (fun i x -> scall (T.Name "gc_set_root") [iconst i; evar x]) xs in
+  let collect = scall (T.Name "gc_small_collection") [] in
+  let restore_vars = List.mapi (fun i x -> T.Expr (T.Assign (evar x, ecall (T.Name "gc_get_root") [iconst i]))) xs in
+  let checkblk = T.If (chk, T.Compound (gc_msg :: set_num_roots :: save_vars @ [collect] @ restore_vars)) in
+  T.Function (
+    [],
+    false,
+    (declare_ordinary_function f xs),
+    T.Compound [checkblk; finish_term st t]
+  )
 
-let define_main_function (t : S.term) : decl_or_fun =
-  define declare_main_function t
+let define_main_function (st : finish_state) (t : S.term) : decl_or_fun =
+  T.Function (
+    [],
+    false,
+    declare_main_function,
+    T.Compound [scall (T.Name "gc_init") []; finish_term st t]
+  )
 
 (* -------------------------------------------------------------------------- *)
 
@@ -320,12 +369,20 @@ let prototypes (fs : decl_or_fun list) : decl_or_fun list =
   List.map prototype fs @
   fs
 
+let declare_tags0 (st : finish_state) : decl_or_fun list =
+  st.tags0
+  |> IMap.bindings
+  |> List.map (fun (tag, a) ->
+      let init = Some (T.InitExpr (macro "MAKE_TAG0" [iconst tag])) in
+      T.Decl ([], (T.Named "uint64_t", None, [T.Ident (var a), init]))
+    )
+
 (* -------------------------------------------------------------------------- *)
 
 (* The translation of a complete program. *)
 
 let finish_program (S.Prog (decls, main) : S.program) : T.program =
-  prototypes (
-    define_main_function main ::
-    List.map define_ordinary_function decls
-  )
+  let st = empty_state () in
+  let main = define_main_function st main in
+  let decls = List.map (define_ordinary_function st) decls in
+  declare_tags0 st @ prototypes (main :: decls)
