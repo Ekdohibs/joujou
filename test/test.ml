@@ -92,9 +92,9 @@ let joujou =
 
 let cc =
   if debug then
-    sprintf "clang -O0 -g -I %s" src
+    sprintf "clang -O0 -Wall -Wno-format -g -I %s" src
   else
-    sprintf "clang -O2 -I %s" src
+    sprintf "clang -O2 -Wall -Wno-format -I %s" src
 
 (* -------------------------------------------------------------------------- *)
 

@@ -122,7 +122,8 @@ let rec split_last l =
 let destruct_tuple v xs t =
   T.Swi (v, [T.Branch (0, xs, t)], None)
 
-let make_contcall (fname : Atom.atom) (already_applied : int) (ks : T.value) (args : T.value list) (extra : T.value list) (st : defun_state) : T.term =
+let make_contcall (fname : Atom.atom) (already_applied : int) (ks : T.value)
+    (args : T.value list) (extra : T.value list) (st : defun_state) : T.term =
   let arity, tags, name, fv = Atom.Map.find fname st.functions_tags in
   assert (List.length fv + already_applied = List.length extra);
   let n = List.length args + already_applied in

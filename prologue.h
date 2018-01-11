@@ -1,6 +1,8 @@
 #include <stdint.h>
 #include <assert.h>
 
+#define GC_DEBUG_LEVEL 1
+
 /* A forward declaration of [block] -- see below. */
 
 struct block;
@@ -52,7 +54,7 @@ static_assert (sizeof(struct block) == sizeof(univ), "");
 	 and is used in a context where an expression of type [univ] is expected. */
 
 #define MAKE_TAG(n, tag) \
-	((((uint64_t) (n)) << 23) | ((tag) << 3) | 2)
+	((((uint64_t) (n)) << 24) | ((tag) << 4) | 2)
 
 extern inline struct block* gc_alloc_minor(size_t n);
 extern inline univ make_block(size_t n, uint32_t tag) {
@@ -66,17 +68,17 @@ extern inline univ make_block(size_t n, uint32_t tag) {
   (make_block((n), (tag)))
 
 #define MAKE_TAG0(tag) \
-	(((tag) << 3) | 2)
+	(((tag) << 4) | 2)
 
 /* In the following macros, [u] has type [univ], so [u.pointer] has type
    [struct block] and is (or should be) the address of a memory block.
    [i] is a field number; the numbering of fields is 0-based. */
 
 #define GET_TAG(u) \
-  (((u).pointer->tag >> 3) & 0xfffff)
+  (((u).pointer->tag >> 4) & 0xfffff)
 
 #define GET_SIZE(u) \
-  ((u).pointer->tag >> 23)
+  ((u).pointer->tag >> 24)
 
 #define GET_FIELD(u,i) \
   (u.pointer->data[i])
@@ -93,7 +95,7 @@ extern inline univ make_block(size_t n, uint32_t tag) {
 #define IS_POINTER(u) \
 	(((u).literal & 3) == 0)
 
-#define IS_MARKED(u) \
+#define IS_FORWARDED(u) \
 	((u).literal & 4)
 
 /* -------------------------------------------------------------------------- */
@@ -117,20 +119,41 @@ extern inline univ make_block(size_t n, uint32_t tag) {
 
 /* GC */
 
-#ifdef GC_DEBUG
+#if GC_DEBUG_LEVEL >= 1
   #define gc_debug printf
 #else
   #define gc_debug(...) do {} while(0)
 #endif
+#if GC_DEBUG_LEVEL >= 2
+  #define gc_debug_v printf
+#else
+  #define gc_debug_v(...) do {} while(0)
+#endif
+#if GC_DEBUG_LEVEL >= 3
+  #define gc_debug_vv printf
+#else
+  #define gc_debug_vv(...) do {} while(0)
+#endif
+#if GC_DEBUG_LEVEL >= 4
+  #define gc_debug_vvv printf
+#else
+  #define gc_debug_vvv(...) do {} while(0)
+#endif
+
 
 struct block* minor_heap_begin;
 struct block* minor_heap_end;
 struct block* minor_heap_allocptr;
-size_t minor_heap_size = 1024;
+size_t minor_heap_size = 2048;
 struct block* major_heap_begin;
 struct block* major_heap_end;
 struct block* major_heap_allocptr;
 size_t major_heap_size = 4096;
+
+#if GC_DEBUG_LEVEL >= 1
+  size_t gc_minor_allocated = 0;
+  size_t gc_promoted = 0;
+#endif
 
 univ gc_roots[256];
 size_t gc_num_roots = 0;
@@ -152,6 +175,9 @@ extern inline int gc_check_size(size_t n) {
 
 /* Unchecked allocation */
 extern inline struct block* gc_alloc_minor(size_t n) {
+#if GC_DEBUG_LEVEL >= 1
+  gc_minor_allocated += n;
+#endif
 	struct block* result = minor_heap_allocptr;
 	minor_heap_allocptr += n;
 	return result;
@@ -163,10 +189,20 @@ extern inline int gc_check_major_size(size_t n) {
 
 /* Unchecked allocation */
 extern inline struct block* gc_alloc_major(size_t n) {
+#if GC_DEBUG_LEVEL >= 1
+	gc_promoted += n;
+#endif
 	struct block* result = major_heap_allocptr;
 	major_heap_allocptr += n;
 	return result;
 }
+
+#if GC_DEBUG_LEVEL >= 1
+void gc_print_stats() {
+	gc_debug("Total minor allocated words: %llu.\n", gc_minor_allocated);
+	gc_debug("Total promoted words: %llu.\n", gc_promoted);
+}
+#endif
 
 extern inline void gc_set_num_roots(size_t n) {
 	gc_num_roots = n;
@@ -180,17 +216,19 @@ extern inline univ gc_get_root(size_t i) {
 	return gc_roots[i];
 }
 
+#if GC_DEBUG_LEVEL >= 1
 void gc_dump_value(univ x) {
 	if (IS_INT(x)) {
 		printf("(%lld)", TO_INT(x) >> 1);
 		return;
 	}
-	printf("(%d [", GET_TAG(x));
+	printf("(%u [", GET_TAG(x));
 	for (size_t i = 0; i < GET_SIZE(x); i++) {
 		gc_dump_value(GET_FIELD(x, i));
 	}
 	printf("])");
 }
+#endif
 
 univ gc_small_collect(univ x_) {
 	univ x = x_;
@@ -200,20 +238,20 @@ univ gc_small_collect(univ x_) {
 	univ rptr[2] = {FROM_INT(2), x};
 	univ* ptr = &rptr[1];
 	univ result;
-	gc_debug("Init tag is %llx.\n", x.pointer->tag);
+	gc_debug_vvv("Init tag is %llx.\n", x.pointer->tag);
 	univ* copyptr = &result;
 	do {
-		gc_debug("Loop at ptr = %p.\n", (void*)ptr);
+		gc_debug_vvv("Loop at ptr = %p.\n", (void*)ptr);
 		if (IS_TAG(x)) {
 			if (ptr == rptr) {
-				gc_debug("Result tag is %llx.\n", result.pointer->tag);
+				gc_debug_vvv("Result tag is %llx.\n", result.pointer->tag);
 				return result;
 			}
-			assert (IS_MARKED(x));
+			assert (IS_FORWARDED(x));
 			size_t bsize = GET_SIZE(FROM_INT(x.literal & ~7));
-			gc_debug("End visit of block at %p and size %lld.\n", (void*)ptr, bsize);
+			gc_debug_vvv("End visit of block at %p and size %llu.\n", (void*)ptr, bsize);
 			ptr = (univ*)((ptr + bsize)->pointer);
-			gc_debug("ptr is now %p.\n", (void*)ptr);
+			gc_debug_vvv("ptr is now %p.\n", (void*)ptr);
 			x = *ptr;
 			continue;
 		}
@@ -221,7 +259,7 @@ univ gc_small_collect(univ x_) {
 		if (IS_INT(x) || !(minor_heap_begin <= x.pointer && x.pointer < minor_heap_end)) {
 			set_val = x;
 		do_copy:
-			gc_debug("Atomic copy of block at %p.\n", (void*)ptr);
+			gc_debug_vvv("Atomic copy of block at %p.\n", (void*)ptr);
 			if (IS_TAG(*(copyptr - 1))) {
 				univ* z = (univ*)((*copyptr).pointer);
 				*copyptr = set_val;
@@ -237,13 +275,13 @@ univ gc_small_collect(univ x_) {
 		assert(IS_POINTER(x));
 
 		uint64_t tag = x.pointer->tag;
-		if (IS_MARKED(FROM_INT(tag))) {
+		if (IS_FORWARDED(FROM_INT(tag))) {
 			set_val = FROM_INT(tag & ~7);
 			goto do_copy;
 		}
 
 		size_t bsize = GET_SIZE(x);
-		gc_debug("Begin visit of block at %p and size %lld.\n", (void*)x.pointer, bsize);
+		gc_debug_vvv("Begin visit of block at %p and size %llu.\n", (void*)x.pointer, bsize);
 		struct block* copy_addr = gc_alloc_major(bsize + 1);
 		univ* ncopyptr = copyptr - 1;
 		if (IS_TAG(*ncopyptr)) {
@@ -262,23 +300,30 @@ univ gc_small_collect(univ x_) {
 }
 
 extern inline void gc_small_collection() {
-	gc_debug("Small collection.\n");
 	assert(!gc_check_major_size(minor_heap_size));
-#ifdef GC_DEBUG
+
+	gc_debug("Starting minor collection.\n");
+#if GC_DEBUG_LEVEL >= 3
 	for (size_t i = 0; i < gc_num_roots; i++) {
 		gc_dump_value(gc_roots[i]);
-		printf("\n");
+		gc_debug("\n");
 	}
 #endif
+
 	for (size_t i = 0; i < gc_num_roots; i++) {
 		gc_roots[i] = gc_small_collect(gc_roots[i]);
 	}
-#ifdef GC_DEBUG
+	minor_heap_allocptr = minor_heap_begin;
+
+#if GC_DEBUG_LEVEL >= 3
 	for (size_t i = 0; i < gc_num_roots; i++) {
 		gc_dump_value(gc_roots[i]);
-		printf("\n");
+		gc_debug("\n");
 	}
 #endif
-	minor_heap_allocptr = minor_heap_begin;
-	gc_debug("Done.\n");
+
+#if GC_DEBUG_LEVEL >= 1
+	gc_debug("Done minor collection.\n");
+	gc_print_stats();
+#endif
 }
