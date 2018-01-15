@@ -299,8 +299,14 @@ univ gc_small_collect(univ x_) {
 	} while (1);
 }
 
+void gc_major_collection() {
+	assert (0);
+}
+
 extern inline void gc_small_collection() {
-	assert(!gc_check_major_size(minor_heap_size));
+	if (gc_check_major_size(minor_heap_size)) {
+		gc_major_collection();
+	}
 
 	gc_debug("Starting minor collection.\n");
 #if GC_DEBUG_LEVEL >= 3

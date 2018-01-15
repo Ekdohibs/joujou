@@ -207,7 +207,7 @@ let process_positive_test (base : string) : unit =
   let errors = base ^ ".err" in
   let cmd = sep (
     "cd" :: good :: "&&" ::
-    cc :: c :: "-o" :: binary :: sprintf "2>%s" errors :: []
+    cc :: c :: "-o" :: binary :: sprintf "2>>%s" errors :: []
   ) in
   if command cmd <> 0 then
     fail base "The C compiler rejects the C file.\n\

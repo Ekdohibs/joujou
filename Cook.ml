@@ -6,11 +6,15 @@ module S = RawLambda
 module T = Lambda
 module TV = T.TV
 module Ty = T.Ty
+module Row = T.Row
 module TVSet = T.TVSet
 
 let disable_type_checking = ref false
 
-type schema = { vars : TVSet.t ; typ : Ty.t }
+type schema = {
+  vars : TVSet.t ;
+  typ : Ty.t ;
+}
 
 type typedef =
   | TBaseType of Atom.atom
@@ -54,9 +58,9 @@ let rec occur var t =
   let open T in
   match (Ty.head t) with
   | Tident _ -> false
-  | Tarrow (ta, tb) -> occur var ta || occur var tb
+  | Tarrow (ta, r, tb) -> occur var ta || occur var tb
   | Tproduct l -> List.exists (occur var) l
-  | Tvar tv -> TV.equal tv var
+  | Tvar tv -> TV.equal (TV.of_typevar tv) var
 
 let rec resolve env t =
   let open T in
@@ -67,23 +71,121 @@ let rec resolve env t =
      | TBaseType n -> Tident n)
   | t -> t
 
+let rec open_row dir r =
+  let open T in
+  match (Row.head r) with
+  | Rempty -> if dir then Rvar (TV.create ()) else Rempty
+  | Reffect (name, r) -> Reffect (name, open_row dir r)
+  | Rvar _ -> r
+
+let rec open_type dir t =
+  let open T in
+  match (Ty.head t) with
+  | Tident n -> Tident n (* TODO: this needs to be opened *)
+  | Tproduct l -> Tproduct (List.map (open_type dir) l)
+  | Tvar tv -> Tvar tv
+  | Tarrow (t1, r, t2) ->
+    Tarrow (open_type (not dir) t1, open_row dir r, open_type dir t2)
+
+let rec unclosable_row dir r =
+  let open T in
+  match (Row.head r) with
+  | Rempty -> TVSet.empty
+  | Reffect (name, r) -> unclosable_row dir r
+  | Rvar tv -> if dir then TVSet.empty else TVSet.singleton (TV.of_rowvar tv)
+
+let rec unclosable_type dir t =
+  let open T in
+  match (Ty.head t) with
+  | Tident n -> TVSet.empty (* TODO: what happens? *)
+  | Tproduct l ->
+    List.map (unclosable_type dir) l |> List.fold_left TVSet.union TVSet.empty
+  | Tvar _ -> TVSet.empty
+  | Tarrow (t1, r, t2) ->
+    TVSet.union (unclosable_type (not dir) t1)
+      (TVSet.union
+         (unclosable_row dir r) (unclosable_type dir t2))
+
+let rec close_row unc r =
+  let open T in
+  match (Row.head r) with
+  | Rempty -> Rempty
+  | Rvar tv -> if TVSet.mem (TV.of_rowvar tv) unc then Rvar tv else Rempty
+  | Reffect (name, r) -> Reffect (name, close_row unc r)
+
+let rec close_type unc t =
+  let open T in
+  match (Ty.head t) with
+  | Tident n -> Tident n (* TODO: hmmmm *)
+  | Tproduct l ->
+    Tproduct (List.map (close_type unc) l)
+  | Tvar tv -> Tvar tv
+  | Tarrow (t1, r, t2) ->
+    Tarrow (close_type unc t1, close_row unc r, close_type unc t2)
+
+let rec row_to_set r =
+  let open T in
+  match Row.head r with
+  | Rempty -> Atom.Set.empty, None
+  | Rvar tv -> Atom.Set.empty, Some tv
+  | Reffect (name, r) ->
+    let s, v = row_to_set r in
+    Atom.Set.add name s, v
+
+let extend_row v s =
+  Atom.Set.fold (fun name v ->
+    assert (v.T.def = None);
+    let nv = TV.create () in
+    v.T.def <- Some (T.Reffect (name, T.Rvar nv));
+    nv
+  ) s v
+
+let rec unify_row r1 r2 =
+  let s1, v1 = row_to_set r1 in
+  let s2, v2 = row_to_set r2 in
+  let s12 = Atom.Set.diff s1 s2 in
+  let s21 = Atom.Set.diff s2 s1 in
+  let v2 =
+    if not (Atom.Set.is_empty s12) then
+      match v2 with
+      | None -> assert false (* TODO: nice error msg *)
+      | Some v2 ->
+        Some (extend_row v2 s12)
+    else v2
+  in
+  let v1 =
+    if not (Atom.Set.is_empty s21) then
+      match v1 with
+      | None -> assert false (* TODO: nice error msg *)
+      | Some v1 ->
+        Some (extend_row v1 s21)
+    else v1
+  in
+  match v1, v2 with
+  | None, None -> ()
+  | None, Some v | Some v, None -> v.T.def <- Some (T.Rempty)
+  | Some v1, Some v2 ->
+    if TV.eq v1 v2 then ()
+    else v1.T.def <- Some (T.Rvar v2)
+
 let rec unify env t1 t2 =
   let open T in
   match (resolve env t1), (resolve env t2) with
   | Tident n1, Tident n2 ->
     if not (Atom.equal n1 n2) then
       unification_error t1 t2
-  | Tarrow (t1a, t1b), Tarrow (t2a, t2b) ->
-    unify env t1a t2a; unify env t1b t2b
+  | Tarrow (t1a, r1, t1b), Tarrow (t2a, r2, t2b) ->
+    unify env t1a t2a; unify env t1b t2b; unify_row r1 r2
   | Tproduct l1, Tproduct l2 ->
     if List.length l1 <> List.length l2 then
       unification_error t1 t2
     else
       List.iter2 (unify env) l1 l2
   | Tvar tv1, Tvar tv2 ->
-    if not (TV.equal tv1 tv2) then tv1.def <- Some t2
+    if not (TV.eq tv1 tv2) then
+      tv1.def <- Some t2
   | Tvar tv, t | t, Tvar tv ->
-    if occur tv t then
+    if occur (TV.of_typevar tv) t then
       unification_error t1 t2
     else
       tv.def <- Some t
@@ -97,21 +199,13 @@ let check_unify_msg msg place env t1 t2 =
 
 let check_unify = check_unify_msg "This expression has type %s but was expected of type %s\nThe type %s is incompatible with the type %s"
 
-let recompute_fvars fv =
-  (* If the definitions of some variables changed, then the free variables
-     might not be the same. However, the new set of free variables is exactly
-     the set of free variables obtained from current definition of the
-     previous free variables.
-  *)
-  TVSet.fold (fun v f -> TVSet.union f (Ty.fvars (T.Tvar v))) fv TVSet.empty
-
 let add_bound id a typ env =
   let fv = Ty.fvars typ in
   let nenv = { env with
     bindings = Smap.add id
         ({ vars = TVSet.empty ; typ = typ }, a)
         env.bindings ;
-    fvars = TVSet.union (recompute_fvars env.fvars) fv ;
+    fvars = TVSet.union (TV.recompute_fvars env.fvars) fv ;
   } in
   nenv
 
@@ -122,79 +216,78 @@ let add id typ env =
 let add_gen id typ env =
   let fv = Ty.fvars typ in
   let a = Atom.fresh id in
+  let nfv = TV.recompute_fvars env.fvars in
+  let vars = TVSet.diff fv nfv in
+(*  let unc = TVSet.union nfv (unclosable_type true typ) in
+    let typ = close_type unc typ in *)
   let nenv = { env with
     bindings = Smap.add id
-        ({ vars = TVSet.diff fv (recompute_fvars env.fvars) ; typ = typ }, a)
+        ({ vars = vars ; typ = typ }, a)
         env.bindings ;
-    fvars = recompute_fvars env.fvars ;
+    fvars = nfv ;
   } in
   (nenv, a)
 
-(*
-let print_env ff env =
-  Format.fprintf ff "-----@.";
-  Smap.iter (fun x ({vars ; typ}, _) ->
-      Format.fprintf ff "%s : forall " x;
-      TVSet.iter (fun v -> Format.fprintf ff "%s " (T.show_tvar v)) vars;
-      Format.fprintf ff ". %s@." (T.show_typ (Ty.canon typ))
-    ) env;
-  Format.fprintf ff "-----@."
-*)
-
-let refresh vars t =
-  let module VarMap = Map.Make(TV) in
-  let m = TVSet.fold
-      (fun v m -> VarMap.add v (TV.create ()) m) vars VarMap.empty in
-  Ty.subst (fun v -> T.Tvar (try VarMap.find v m with Not_found -> v)) t
-
 let find id env =
   let ({ vars = vars ; typ = typ }, a) = Smap.find id env.bindings in
-  refresh vars typ, a
+  (* open_type true (Ty.refresh vars typ), a *)
+  Ty.refresh vars typ, a
 
 let rec cook_term env { S.place ; S.value } =
   match value with
   | S.Var x -> begin
     match find x env with
-    | typ, a -> typ, T.Var a
+    | typ, a -> typ, T.Rvar (TV.create()), T.Var a
     | exception Not_found -> error place "Unbound variable: %s" x
     end
   | S.Lam (x, t) ->
     let tv = T.Tvar (TV.create ()) in
     let env, x = add x tv env in
-    let typ, t = cook_term env t in
-    T.Tarrow (tv, typ), T.Lam (T.NoSelf, x, t)
+    let typ, row, t = cook_term env t in
+    T.Tarrow (tv, row, typ), T.Rvar (TV.create ()), T.Lam (T.NoSelf, x, t)
   | S.App (t1, t2) ->
-    let ty1, nt1 = cook_term env t1 in
-    let ty2, nt2 = cook_term env t2 in
+    let ty1, row1, nt1 = cook_term env t1 in
+    let ty2, row2, nt2 = cook_term env t2 in
+    unify_row row1 row2;
     let tv = T.Tvar (TV.create ()) in
-    check_unify t1.S.place env ty1 (T.Tarrow (ty2, tv));
-    tv, T.App (nt1, nt2)
+    let rv = T.Rvar (TV.create ()) in
+    check_unify t1.S.place env ty1 (T.Tarrow (ty2, rv, tv));
+    unify_row row1 rv;
+    tv, rv, T.App (nt1, nt2)
   | S.Lit i ->
-    builtin_int, T.Lit i
+    builtin_int, T.Rvar (TV.create ()), T.Lit i
   | S.BinOp (t1, op, t2) ->
-    let ty1, nt1 = cook_term env t1 in
-    let ty2, nt2 = cook_term env t2 in
+    let ty1, row1, nt1 = cook_term env t1 in
+    let ty2, row2, nt2 = cook_term env t2 in
     check_unify t1.S.place env ty1 builtin_int;
     check_unify t2.S.place env ty2 builtin_int;
-    builtin_int, T.BinOp (nt1, op, nt2)
+    unify_row row1 row2;
+    builtin_int, row1, T.BinOp (nt1, op, nt2)
   | S.Print t ->
-    let ty, nt = cook_term env t in
+    let ty, row, nt = cook_term env t in
     check_unify t.S.place env ty builtin_int;
-    builtin_int, T.Print nt
+    (* TODO: print produces io effect *)
+    builtin_int, row, T.Print nt
   | S.Let (recursive, x, t1, t2) ->
-    let env, x, nt1 = cook_let env recursive x t1 in
-    let ty2, nt2 = cook_term env t2 in
-    ty2, T.Let (x, nt1, nt2)
+    let env, x, nt1, _, row1 = cook_let env recursive x t1 in
+    let ty2, row2, nt2 = cook_term env t2 in
+    unify_row row1 row2;
+    ty2, row1, T.Let (x, nt1, nt2)
   | S.IfZero (t1, t2, t3) ->
-    let ty1, nt1 = cook_term env t1 in
-    let ty2, nt2 = cook_term env t2 in
-    let ty3, nt3 = cook_term env t3 in
+    let ty1, row1, nt1 = cook_term env t1 in
+    let ty2, row2, nt2 = cook_term env t2 in
+    let ty3, row3, nt3 = cook_term env t3 in
     check_unify t1.S.place env ty1 builtin_int;
     check_unify t3.S.place env ty3 ty2;
-    ty2, T.IfZero (nt1, nt2, nt3)
+    unify_row row1 row2;
+    unify_row row1 row3;
+    ty2, row1, T.IfZero (nt1, nt2, nt3)
   | S.Tuple l ->
     let l = List.map (cook_term env) l in
-    T.Tproduct (List.map fst l), (T.Tuple (List.map snd l))
+    let row = T.Rvar (TV.create ()) in
+    List.iter (fun (_, r, _) -> unify_row r row) l;
+    T.Tproduct (List.map (fun (ty, _, _) -> ty) l), row,
+      (T.Tuple (List.map (fun (_, _, nt) -> nt) l))
   | S.Constructor (x, t) ->
     let catom =
       try Smap.find x env.constructor_bindings
@@ -216,26 +309,32 @@ let rec cook_term env { S.place ; S.value } =
         error place "The constructor %s expects %d argument(s), but is applied here to %d argument(s)" x n m
     in
     let args = List.map (fun t -> t.S.place, cook_term env t) args in
+    let row = T.Rvar (TV.create ()) in
+    List.iter (fun (_, (_, r, _)) -> unify_row r row) args;
     List.iter2
-      (fun (place, (ty, _)) ety -> check_unify place env ty ety) args cargs;
+      (fun (place, (ty, _, _)) ety -> check_unify place env ty ety) args cargs;
+    (* TODO: if effect, add to list *)
     let nt =
       if is_effect then
         let (_, nt, _) = Atom.Map.find tname env.effect_defs in nt
       else
         T.Tident tname
     in
-    nt, T.Constructor ((catom, ctag, is_effect), List.map (fun (_, (_, t)) -> t) args)
+    nt, row, T.Constructor ((catom, ctag, is_effect), List.map (fun (_, (_, _, t)) -> t) args)
   | S.Match (t, l) ->
-    let ty, nt = cook_term env t in
+    let ty, row, nt = cook_term env t in
     let rty = T.Tvar (TV.create ()) in
+    let row1 = T.Rvar (TV.create ()) in
     let nl = List.map (fun (p, t1) ->
       let np, dv = cook_pattern_or_effect env ty rty p in
       let nenv = Smap.fold (fun x (a, t) env -> add_bound x a t env) dv env in
-      let ty1, nt1 = cook_term nenv t1 in
+      let ty1, r, nt1 = cook_term nenv t1 in
+      unify_row r row1;
       check_unify t1.S.place env ty1 rty;
       (np, nt1)
     ) l in
-    rty, T.Match (nt, nl)
+    unify_row row row1; (* TODO: handle effects *)
+    rty, row1, T.Match (nt, nl)
 
 and cook_pattern_or_effect env ty rty = function
   | S.Pattern p ->
@@ -263,7 +362,8 @@ and cook_pattern_or_effect env ty rty = function
       | Some _, None ->
         error place "The effect constructor %s expects 0 arguments, but is applied here to 1 argument" c
     in
-    let kty = T.Tarrow (ty2, rty) in
+    (* TODO *)
+    let kty = T.Tarrow (ty2, T.Rempty, rty) in
     let kv = Atom.fresh k in
     T.Effect (np, kv), (Smap.add k (kv, kty) dv)
 
@@ -345,21 +445,21 @@ and cook_pattern env mapped_vars ty { S.value ; S.place } =
 and cook_let env recursive x t =
   match recursive, t with
   | S.NonRecursive, t ->
-    let ty, t = cook_term env t in
-    let env, x = add_gen x ty env in
-    (env, x, t)
+    let ty, row, t = cook_term env t in
+    let env, nx = add_gen x ty env in
+    (env, nx, t, fst (Smap.find x env.bindings), row)
   | S.Recursive, { S.value = S.Lam (y, t) ; _ } ->
     let tv = T.Tvar (TV.create ()) in
     let ty, x1, y, nt =
       let env, x = add x tv env in
       let tv1 = T.Tvar (TV.create ()) in
       let env, y = add y tv1 env in
-      let ty, nt = cook_term env t in
-      T.Tarrow (tv1, ty), x, y, nt
+      let ty, row, nt = cook_term env t in
+      T.Tarrow (tv1, row, ty), x, y, nt
     in
     check_unify t.S.place env ty tv;
     let env, x2 = add_gen x ty env in
-    (env, x2, T.Lam (T.Self x1, y, nt))
+    (env, x2, T.Lam (T.Self x1, y, nt), fst (Smap.find x env.bindings), T.Rvar (TV.create ()))
   | _, { S.place ; _} ->
     error place
       "the right-hand side of 'let rec' must be a lambda-abstraction"
@@ -371,19 +471,26 @@ let rec cook_type env { S.place ; S.value } =
     | n -> T.Tident n
     | exception Not_found -> error place "Unbound type: %s" x
     end
-  | S.TArrow (t1, t2) ->
-    T.Tarrow (cook_type env t1, cook_type env t2)
+  | S.TArrow (t1, t2) -> (* TODO *)
+    T.Tarrow (cook_type env t1, T.Rempty, cook_type env t2)
   | S.TTuple l ->
     T.Tproduct (List.map (cook_type env) l)
+
+let print_schema ff { vars ; typ } =
+  let fv = Ty.fvars typ in
+  Ty.print (TV.get_print_names fv vars) 0 ff typ
 
 let rec cook_program env = function
   | { S.value = S.DTerm t ; _ } :: p ->
     let a = Atom.fresh "_" in
-    let nt = snd (cook_term env t) in
+    let ty, row, nt = cook_term env t in
+    unify_row row T.Rempty; (* TODO allow io *)
     T.Let (a, nt, cook_program env p)
   | { S.value = S.DLet (recursive, x, t) ; _ } :: p ->
-    let env, x, nt = cook_let env recursive x t in
-    T.Let (x, nt, cook_program env p)
+    let env, nx, nt, ty, row = cook_let env recursive x t in
+    unify_row row T.Rempty; (* TODO allow io *)
+    Format.eprintf "val %s : @[<hv>%a@]@." x print_schema ty;
+    T.Let (nx, nt, cook_program env p)
   | { S.value = S.DTypeSynonym (x, t) ; _ } :: p ->
     let n = Atom.fresh x in
     let nenv = { env with

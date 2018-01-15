@@ -15,26 +15,8 @@ let share : string -> string =
 
 (* -------------------------------------------------------------------------- *)
 
-(* Removing any trailing digits in a string. *)
-
-let is_digit c =
-  Char.code '0' <= Char.code c && Char.code c <= Char.code '9'
-
-let remove_trailing_digits (s : string) : string =
-  let n = ref (String.length s) in
-  while !n > 0 && is_digit s.[!n-1] do n := !n-1 done;
-  (* We assume that there is at least one non-digit character in the string. *)
-  assert (!n > 0);
-  String.sub s 0 !n
-
-(* -------------------------------------------------------------------------- *)
-
 (* An atom is implemented as a pair of an integer identity and a string that
    serves as a printing hint. *)
-
-(* We maintain the invariant that a hint is nonempty and does not end in a
-   digit. This allows us to later produce unique identifiers, without risk of
-   collisions, by concatenating a hint and a unique number. *)
 
 (* To preserve space, hints are maximally shared. This is not essential for
    correctness, though. *)
@@ -69,7 +51,7 @@ let allocate () =
 
 let fresh hint =
   let identity = allocate()
-  and hint = share (remove_trailing_digits hint) in
+  and hint = share hint in
   { identity; hint }
 
 (* [copy a] returns a fresh atom modeled after the atom [a]. *)
