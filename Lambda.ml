@@ -21,6 +21,7 @@
 type 'a tvar = {
   id : int ;
   mutable def : 'a option ;
+  mutable locked : bool ;
 }
 
 [@@deriving show { with_path = false }]
@@ -104,10 +105,13 @@ module TV_ = struct
   let equal v1 v2 = (get_id v1) = (get_id v2)
   let eq v1 v2 = v1.id = v2.id
   let r = ref 0
-  let create () = incr r ; { id = !r ; def = None }
+  let create () = incr r ; { id = !r ; def = None ; locked = false }
   let copy = function
     | TVty _ -> TVty (create ())
     | TVrow _ -> TVrow (create ())
+  let bind tv v = assert (not tv.locked); tv.def <- Some v; tv.locked <- true
+  let lock tv = tv.locked <- true
+  let lock_t = function | TVty tv -> lock tv | TVrow tv -> lock tv
 end
 
 module TVSet = Set.Make(TV_)
@@ -228,6 +232,9 @@ module TV : sig
   val to_rowvar : t -> row tvar
   val create : unit -> 'a tvar
   val copy : t -> t
+  val bind : 'a tvar -> 'a -> unit
+  val lock : 'a tvar -> unit
+  val lock_t : t -> unit
   val recompute_fvars : TVSet.t -> TVSet.t
   val get_print_names : TVSet.t -> TVSet.t -> string TVMap.t
 end = struct
