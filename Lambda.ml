@@ -78,6 +78,10 @@ and typ =
   | Tarrow of typ * row * typ
   | Tproduct of typ list
   | Tvar of typ tvar
+  | Tjoin of typ * typ
+  | Tmeet of typ * typ
+  | Tbot | Ttop
+  | Trec of typ tvar * typ
 
 and row =
   | Reffect of tname * row
@@ -164,20 +168,37 @@ module Ty = struct
 
   let rec canon t =
     match t with
-    | Tident _ -> t
+    | Tident _ | Tbot | Ttop -> t
     | Tarrow (ta, r, tb) -> Tarrow (canon ta, Row.canon r, canon tb)
     | Tproduct l -> Tproduct (List.map canon l)
     | Tvar {def = None ; _} -> t
     | Tvar {def = Some ty ; _} -> canon ty
+    | Tjoin (t1, t2) -> Tjoin (canon t1, canon t2)
+    | Tmeet (t1, t2) -> Tmeet (canon t1, canon t2)
+    | Trec (tv, t1) -> Trec (tv, canon t1)
 
   let rec fvars t =
     match head t with
-    | Tident _ -> TVSet.empty
+    | Tident _ | Tbot | Ttop -> TVSet.empty
     | Tarrow (ta, r, tb) ->
       TVSet.union (fvars ta) (TVSet.union (Row.fvars r) (fvars tb))
     | Tproduct l ->
       List.fold_left TVSet.union TVSet.empty (List.map fvars l)
     | Tvar tv -> TVSet.singleton (TV_.of_typevar tv)
+    | Tjoin (t1, t2) | Tmeet (t1, t2) -> TVSet.union (fvars t1) (fvars t2)
+    | Trec (tv, t1) -> TVSet.remove (TV_.of_typevar tv) (fvars t1)
+
+  let rec print_vars t =
+    match head t with
+    | Tident _ | Tbot | Ttop -> TVSet.empty
+    | Tarrow (ta, r, tb) ->
+      TVSet.union (print_vars ta) (TVSet.union (Row.fvars r) (print_vars tb))
+    | Tproduct l ->
+      List.fold_left TVSet.union TVSet.empty (List.map print_vars l)
+    | Tvar tv -> TVSet.singleton (TV_.of_typevar tv)
+    | Tjoin (t1, t2) | Tmeet (t1, t2) ->
+      TVSet.union (print_vars t1) (print_vars t2)
+    | Trec (tv, t1) -> print_vars t1
 
   let rec refresh_rec sigma t =
     match head t with
@@ -186,6 +207,13 @@ module Ty = struct
       Tarrow (refresh_rec sigma t1, Row.refresh_rec sigma r,
               refresh_rec sigma t2)
     | Tproduct l -> Tproduct (List.map (refresh_rec sigma) l)
+    | Tbot -> Tbot
+    | Ttop -> Ttop
+    | Tjoin (t1, t2) -> Tjoin (refresh_rec sigma t1, refresh_rec sigma t2)
+    | Tmeet (t1, t2) -> Tmeet (refresh_rec sigma t1, refresh_rec sigma t2)
+    | Trec (tv, t1) ->
+      assert (not (TVMap.mem (TV_.of_typevar tv) sigma));
+      Trec (tv, refresh_rec sigma t1)
     | Tvar tv ->
       try Tvar (TV_.to_typevar (TVMap.find (TV_.of_typevar tv) sigma))
       with Not_found -> Tvar tv
@@ -206,6 +234,16 @@ module Ty = struct
   let rec print sigma level ff t =
     match (head t) with
     | Tident n -> Format.fprintf ff "%s" (Atom.hint n)
+    | Tbot -> Format.fprintf ff "False"
+    | Ttop -> Format.fprintf ff "True"
+    | Tjoin (t1, t2) ->
+      if level >= 5 then Format.fprintf ff "(";
+      Format.fprintf ff "%a \\/ %a" (print sigma 6) t1 (print sigma 6) t2;
+      if level >= 5 then Format.fprintf ff ")"
+    | Tmeet (t1, t2) ->
+      if level >= 7 then Format.fprintf ff "(";
+      Format.fprintf ff "%a /\\ %a" (print sigma 8) t1 (print sigma 8) t2;
+      if level >= 7 then Format.fprintf ff ")"
     | Tarrow (t1, r, t2) ->
       if level >= 3 then Format.fprintf ff "(";
       Format.fprintf ff "%a -[@[<hov 2>%a@]]->@ @[<hv>%a@]"
@@ -219,6 +257,15 @@ module Ty = struct
       ) l;
       if level >= 4 then Format.fprintf ff ")"
     | Tvar tv -> Format.fprintf ff "%s" (TVMap.find (TV_.of_typevar tv) sigma)
+    | Trec (tv, t1) ->
+      if not (TVMap.mem (TV_.of_typevar tv) sigma) then
+        print sigma level ff t1
+      else begin
+        if level >= 1 then Format.fprintf ff "(";
+        Format.fprintf ff "%a as %s" (print sigma level) t1
+          (TVMap.find (TV_.of_typevar tv) sigma);
+        if level >= 1 then Format.fprintf ff ")"
+      end
 end
 
 module TV : sig

@@ -12,7 +12,8 @@ module TVSet = T.TVSet
 let disable_type_checking = ref false
 
 type scheme = {
-  hypotheses : Ty.t Atom.Map.t ;
+  (* First place where the variable was used, for error reporting. *)
+  hypotheses : (Ty.t * place) Atom.Map.t ;
   typ : Ty.t ;
 }
 
@@ -61,10 +62,12 @@ let unification_error t1 t2 =
 let rec occur var t =
   let open T in
   match (Ty.head t) with
-  | Tident _ -> false
+  | Tident _ | Tbot | Ttop -> false
   | Tarrow (ta, r, tb) -> occur var ta || occur var tb
   | Tproduct l -> List.exists (occur var) l
   | Tvar tv -> TV.equal (TV.of_typevar tv) var
+  | Tjoin (t1, t2) | Tmeet (t1, t2) -> occur var t1 || occur var t2
+  | Trec (_, t1) -> occur var t1
 
 let rec resolve env t =
   let open T in
@@ -223,7 +226,12 @@ let add id typ env =
 
 let fvars_scheme { hypotheses ; typ } =
   Atom.Map.fold
-    (fun _ ty s -> TVSet.union s (Ty.fvars ty)) hypotheses (Ty.fvars typ)
+    (fun _ (ty, _) s -> TVSet.union s (Ty.fvars ty)) hypotheses (Ty.fvars typ)
+
+let print_vars_scheme { hypotheses ; typ } =
+  Atom.Map.fold
+    (fun _ (ty, _) s -> TVSet.union s (Ty.print_vars ty))
+    hypotheses (Ty.print_vars typ)
 
 let add_bound id a env =
   { env with bindings = Smap.add id (BInfer, a) env.bindings }
@@ -243,15 +251,16 @@ let refresh_scheme { hypotheses ; typ } =
   let fvars = fvars_scheme { hypotheses ; typ } in
   let m = TVSet.fold (fun v m -> T.TVMap.add v (TV.copy v) m) fvars T.TVMap.empty in
   {
-    hypotheses = Atom.Map.map (Ty.refresh_rec m) hypotheses ;
+    hypotheses = Atom.Map.map
+        (fun (ty, place) -> (Ty.refresh_rec m ty, place)) hypotheses ;
     typ = Ty.refresh_rec m typ ;
   }
 
 let print_scheme ff { hypotheses ; typ } =
-  let fv = fvars_scheme { hypotheses ; typ } in
+  let fv = print_vars_scheme { hypotheses ; typ } in
   let pnames = TV.get_print_names fv fv in
   Format.fprintf ff "[@[<hov 2>";
-  List.iteri (fun i (a, ty) ->
+  List.iteri (fun i (a, (ty, _)) ->
       if i > 0 then Format.fprintf ff ",@ ";
       Format.fprintf ff "%s : %a" (Atom.hint a) (Ty.print pnames 0) ty
     ) (Atom.Map.bindings hypotheses);
@@ -262,19 +271,19 @@ let unify_hyp env hp1 hp2 =
       match ty1, ty2 with
       | None, None -> None
       | None, Some ty | Some ty, None -> Some ty
-      | Some ty1, Some ty2 ->
-        if not !disable_type_checking then unify env ty1 ty2;
-        Some ty1
+      | Some (ty1, place1), Some (ty2, place2) ->
+        check_unify place2 env ty1 ty2;
+        Some (ty1, place1)
   ) hp1 hp2
 
-let find id env =
+let find place id env =
   let (sc, a) = Smap.find id env.bindings in
   match sc with
   | BScheme sc -> refresh_scheme sc, a
   | BInfer ->
     let tv = T.Tvar (TV.create ()) in
     let sc = {
-      hypotheses = Atom.Map.singleton a tv ;
+      hypotheses = Atom.Map.singleton a (tv, place) ;
       typ = tv ;
     } in
     sc, a
@@ -282,7 +291,7 @@ let find id env =
 let rec cook_term env { S.place ; S.value } =
   match value with
   | S.Var x -> begin
-    match find x env with
+    match find place x env with
     | sc, a -> sc, T.Var a
     | exception Not_found -> error place "Unbound variable: %s" x
     end
@@ -291,7 +300,7 @@ let rec cook_term env { S.place ; S.value } =
     let sc, t = cook_term nenv t in
     let nsc =
       try
-        let ty = Atom.Map.find x sc.hypotheses in
+        let ty, _ = Atom.Map.find x sc.hypotheses in
         {
           hypotheses = Atom.Map.remove x sc.hypotheses ;
           typ = T.Tarrow (ty, T.Rempty, sc.typ) ;
@@ -403,7 +412,8 @@ let rec cook_term env { S.place ; S.value } =
       check_unify t1.S.place env sc1.typ rty;
       let nh = Smap.fold (fun _ (a, t) h ->
           try
-            unify env (Atom.Map.find a h) t;
+            let ty, place = Atom.Map.find a h in
+            check_unify place env ty t;
             Atom.Map.remove a h
           with Not_found -> h
       ) dv sc1.hypotheses in
@@ -538,7 +548,7 @@ and cook_let env recursive x t =
       let nenv, ny = add y nenv in
       let sc, nt = cook_term nenv t in
       let nsc = try
-          let ty = Atom.Map.find ny sc.hypotheses in
+          let ty, _ = Atom.Map.find ny sc.hypotheses in
           {
             hypotheses = Atom.Map.remove ny sc.hypotheses ;
             typ = T.Tarrow (ty, T.Rempty, sc.typ) ;
@@ -550,8 +560,8 @@ and cook_let env recursive x t =
           }
       in
       let nh = try
-          let ty = Atom.Map.find nx nsc.hypotheses in
-          check_unify t.S.place env nsc.typ ty;
+          let ty, place = Atom.Map.find nx nsc.hypotheses in
+          check_unify place env nsc.typ ty;
           Atom.Map.remove nx nsc.hypotheses
         with Not_found -> nsc.hypotheses
       in
