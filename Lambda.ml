@@ -90,6 +90,16 @@ and row =
 
 [@@deriving show { with_path = false }]
 
+let tmeet t1 t2 =
+  match t1, t2 with
+  | Ttop, t | t, Ttop -> t
+  | t1, t2 -> Tmeet (t1, t2)
+
+let tjoin t1 t2 =
+  match t1, t2 with
+  | Tbot, t | t, Tbot -> t
+  | t1, t2 -> Tjoin (t1, t2)
+
 module TV_ = struct
   type t =
     | TVty of typ tvar
@@ -173,8 +183,8 @@ module Ty = struct
     | Tproduct l -> Tproduct (List.map canon l)
     | Tvar {def = None ; _} -> t
     | Tvar {def = Some ty ; _} -> canon ty
-    | Tjoin (t1, t2) -> Tjoin (canon t1, canon t2)
-    | Tmeet (t1, t2) -> Tmeet (canon t1, canon t2)
+    | Tjoin (t1, t2) -> tjoin (canon t1) (canon t2)
+    | Tmeet (t1, t2) -> tmeet (canon t1) (canon t2)
     | Trec (tv, t1) -> Trec (tv, canon t1)
 
   let rec fvars t =
@@ -234,15 +244,15 @@ module Ty = struct
   let rec print sigma level ff t =
     match (head t) with
     | Tident n -> Format.fprintf ff "%s" (Atom.hint n)
-    | Tbot -> Format.fprintf ff "False"
-    | Ttop -> Format.fprintf ff "True"
+    | Tbot -> Format.fprintf ff "Bot"
+    | Ttop -> Format.fprintf ff "Top"
     | Tjoin (t1, t2) ->
       if level >= 5 then Format.fprintf ff "(";
-      Format.fprintf ff "%a \\/ %a" (print sigma 6) t1 (print sigma 6) t2;
+      Format.fprintf ff "%a | %a" (print sigma 6) t1 (print sigma 6) t2;
       if level >= 5 then Format.fprintf ff ")"
     | Tmeet (t1, t2) ->
       if level >= 7 then Format.fprintf ff "(";
-      Format.fprintf ff "%a /\\ %a" (print sigma 8) t1 (print sigma 8) t2;
+      Format.fprintf ff "%a & %a" (print sigma 8) t1 (print sigma 8) t2;
       if level >= 7 then Format.fprintf ff ")"
     | Tarrow (t1, r, t2) ->
       if level >= 3 then Format.fprintf ff "(";
