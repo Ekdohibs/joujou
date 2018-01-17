@@ -18,14 +18,6 @@
 
 (* Variables are atoms. *)
 
-type 'a tvar = {
-  id : int ;
-  mutable def : 'a option ;
-  mutable locked : bool ;
-}
-
-[@@deriving show { with_path = false }]
-
 type variable =
   Atom.atom
 
@@ -73,241 +65,306 @@ and pattern_or_effect =
   | Pattern of pattern
   | Effect of pattern * variable
 
-and typ =
-  | Tident of tname
-  | Tarrow of typ * row * typ
-  | Tproduct of typ list
-  | Tvar of typ tvar
-  | Tjoin of typ * typ
-  | Tmeet of typ * typ
-  | Tbot | Ttop
-  | Trec of typ tvar * typ
-
-and row =
-  | Reffect of tname * row
-  | Rvar of row tvar
-  | Rempty
-
 [@@deriving show { with_path = false }]
 
-let tmeet t1 t2 =
-  match t1, t2 with
-  | Ttop, t | t, Ttop -> t
-  | t1, t2 -> Tmeet (t1, t2)
-
-let tjoin t1 t2 =
-  match t1, t2 with
-  | Tbot, t | t, Tbot -> t
-  | t1, t2 -> Tjoin (t1, t2)
-
-module TV_ = struct
+module rec TyC : sig
   type t =
-    | TVty of typ tvar
-    | TVrow of row tvar
-  let of_typevar tv = TVty tv
-  let to_typevar = function
-    | TVty tv -> tv
-    | _ -> assert false
-  let of_rowvar tv = TVrow tv
-  let to_rowvar = function
-    | TVrow tv -> tv
-    | _ -> assert false
-  let get_id = function
-    | TVty v -> v.id
-    | TVrow v -> v.id
-  let compare v1 v2 = compare (get_id v1) (get_id v2)
-  let equal v1 v2 = (get_id v1) = (get_id v2)
-  let eq v1 v2 = v1.id = v2.id
-  let r = ref 0
-  let create () = incr r ; { id = !r ; def = None ; locked = false }
-  let copy = function
-    | TVty _ -> TVty (create ())
-    | TVrow _ -> TVrow (create ())
-  let bind tv v = assert (not tv.locked); tv.def <- Some v; tv.locked <- true
-  let lock tv = tv.locked <- true
-  let lock_t = function | TVty tv -> lock tv | TVrow tv -> lock tv
-end
-
-module TVSet = Set.Make(TV_)
-module TVMap = Map.Make(TV_)
-
-module Row = struct
-  type t = row
-
-  let rec head r =
-    match r with
-    | Rvar {def = Some r' ; _} -> head r'
-    | _ -> r
-
-  let rec canon r =
-    match r with
-    | Reffect (name, r) -> Reffect (name, canon r)
-    | Rempty -> Rempty
-    | Rvar {def = None ; _} -> r
-    | Rvar {def = Some r ; _} -> canon r
-
-  let rec fvars r =
-    match head r with
-    | Reffect (_, r) -> fvars r
-    | Rempty -> TVSet.empty
-    | Rvar rv -> TVSet.singleton (TV_.of_rowvar rv)
-
-  let rec refresh_rec sigma r =
-    match head r with
-    | Rempty -> Rempty
-    | Reffect (name, r) -> Reffect (name, refresh_rec sigma r)
-    | Rvar tv ->
-      try Rvar (TV_.to_rowvar (TVMap.find (TV_.of_rowvar tv) sigma))
-      with Not_found -> Rvar tv
-
-  let rec print sigma ff r =
-    match (head r) with
-    | Rempty -> ()
-    | Reffect (name, r) ->
-      Format.fprintf ff "%s |@ %a" (Atom.hint name) (print sigma) r
-    | Rvar tv -> Format.fprintf ff "%s" (TVMap.find (TV_.of_rowvar tv) sigma)
-end
-
-module Ty = struct
-  type t = typ
-
-  let rec head t =
-    match t with
-    | Tvar {def = Some t' ; _} -> head t'
-    | _ -> t
-
-  let rec canon t =
-    match t with
-    | Tident _ | Tbot | Ttop -> t
-    | Tarrow (ta, r, tb) -> Tarrow (canon ta, Row.canon r, canon tb)
-    | Tproduct l -> Tproduct (List.map canon l)
-    | Tvar {def = None ; _} -> t
-    | Tvar {def = Some ty ; _} -> canon ty
-    | Tjoin (t1, t2) -> tjoin (canon t1) (canon t2)
-    | Tmeet (t1, t2) -> tmeet (canon t1) (canon t2)
-    | Trec (tv, t1) -> Trec (tv, canon t1)
-
-  let rec fvars t =
-    match head t with
-    | Tident _ | Tbot | Ttop -> TVSet.empty
-    | Tarrow (ta, r, tb) ->
-      TVSet.union (fvars ta) (TVSet.union (Row.fvars r) (fvars tb))
-    | Tproduct l ->
-      List.fold_left TVSet.union TVSet.empty (List.map fvars l)
-    | Tvar tv -> TVSet.singleton (TV_.of_typevar tv)
-    | Tjoin (t1, t2) | Tmeet (t1, t2) -> TVSet.union (fvars t1) (fvars t2)
-    | Trec (tv, t1) -> TVSet.remove (TV_.of_typevar tv) (fvars t1)
-
-  let rec print_vars t =
-    match head t with
-    | Tident _ | Tbot | Ttop -> TVSet.empty
-    | Tarrow (ta, r, tb) ->
-      TVSet.union (print_vars ta) (TVSet.union (Row.fvars r) (print_vars tb))
-    | Tproduct l ->
-      List.fold_left TVSet.union TVSet.empty (List.map print_vars l)
-    | Tvar tv -> TVSet.singleton (TV_.of_typevar tv)
-    | Tjoin (t1, t2) | Tmeet (t1, t2) ->
-      TVSet.union (print_vars t1) (print_vars t2)
-    | Trec (tv, t1) -> print_vars t1
-
-  let rec refresh_rec sigma t =
-    match head t with
-    | Tident n -> Tident n
-    | Tarrow (t1, r, t2) ->
-      Tarrow (refresh_rec sigma t1, Row.refresh_rec sigma r,
-              refresh_rec sigma t2)
-    | Tproduct l -> Tproduct (List.map (refresh_rec sigma) l)
-    | Tbot -> Tbot
-    | Ttop -> Ttop
-    | Tjoin (t1, t2) -> Tjoin (refresh_rec sigma t1, refresh_rec sigma t2)
-    | Tmeet (t1, t2) -> Tmeet (refresh_rec sigma t1, refresh_rec sigma t2)
-    | Trec (tv, t1) ->
-      assert (not (TVMap.mem (TV_.of_typevar tv) sigma));
-      Trec (tv, refresh_rec sigma t1)
-    | Tvar tv ->
-      try Tvar (TV_.to_typevar (TVMap.find (TV_.of_typevar tv) sigma))
-      with Not_found -> Tvar tv
-
-  let refresh vars t =
-    let m = TVSet.fold
-        (fun v m -> TVMap.add v (TV_.copy v) m) vars TVMap.empty in
-    refresh_rec m t
-(*
-  let rec subst sigma t =
-    match (head t) with
-    | Tident n -> Tident n
-    | Tarrow (t1, r, t2) ->
-      Tarrow (subst sigma t1, r, subst sigma t2)
-    | Tproduct l -> Tproduct (List.map (subst sigma) l)
-    | Tvar tv -> sigma tv
-*)
-  let rec print sigma level ff t =
-    match (head t) with
-    | Tident n -> Format.fprintf ff "%s" (Atom.hint n)
-    | Tbot -> Format.fprintf ff "Bot"
-    | Ttop -> Format.fprintf ff "Top"
-    | Tjoin (t1, t2) ->
-      if level >= 5 then Format.fprintf ff "(";
-      Format.fprintf ff "%a | %a" (print sigma 6) t1 (print sigma 6) t2;
-      if level >= 5 then Format.fprintf ff ")"
-    | Tmeet (t1, t2) ->
-      if level >= 7 then Format.fprintf ff "(";
-      Format.fprintf ff "%a & %a" (print sigma 8) t1 (print sigma 8) t2;
-      if level >= 7 then Format.fprintf ff ")"
-    | Tarrow (t1, r, t2) ->
-      if level >= 3 then Format.fprintf ff "(";
-      Format.fprintf ff "%a -[@[<hov 2>%a@]]->@ @[<hv>%a@]"
-        (print sigma 3) t1 (Row.print sigma) r (print sigma 2) t2;
-      if level >= 3 then Format.fprintf ff ")"
-    | Tproduct l ->
-      if level >= 4 then Format.fprintf ff "(";
-      List.iteri (fun i t ->
-          if i > 0 then Format.fprintf ff " *@ ";
-          Format.fprintf ff "%a" (print sigma 4) t
-      ) l;
-      if level >= 4 then Format.fprintf ff ")"
-    | Tvar tv -> Format.fprintf ff "%s" (TVMap.find (TV_.of_typevar tv) sigma)
-    | Trec (tv, t1) ->
-      if not (TVMap.mem (TV_.of_typevar tv) sigma) then
-        print sigma level ff t1
-      else begin
-        if level >= 1 then Format.fprintf ff "(";
-        Format.fprintf ff "%a as %s" (print sigma level) t1
-          (TVMap.find (TV_.of_typevar tv) sigma);
-        if level >= 1 then Format.fprintf ff ")"
-      end
-end
-
-module TV : sig
-  type t = TV_.t
-  val compare : t -> t -> int
-  val eq : 'a tvar -> 'a tvar -> bool
-  val equal : t -> t -> bool
-  val of_typevar : typ tvar -> t
-  val to_typevar : t -> typ tvar
-  val of_rowvar : row tvar -> t
-  val to_rowvar : t -> row tvar
-  val create : unit -> 'a tvar
-  val copy : t -> t
-  val bind : 'a tvar -> 'a -> unit
-  val lock : 'a tvar -> unit
-  val lock_t : t -> unit
-  val recompute_fvars : TVSet.t -> TVSet.t
-  val get_print_names : TVSet.t -> TVSet.t -> string TVMap.t
+    | Tident of tname
+    | Tarrow of TySSet.t * TySSet.t
+    | Tproduct of TySSet.t list
 end = struct
-  include TV_
-  let recompute_fvar = function
-    | TVty tv -> Ty.fvars (Tvar tv)
-    | TVrow tv -> Row.fvars (Rvar tv)
-  let recompute_fvars fv =
-    TVSet.fold (fun v f -> TVSet.union f (recompute_fvar v)) fv TVSet.empty
-  let get_print_names vars generalized =
-    let sigma, _ = TVSet.fold (fun v (m, i) ->
-      let s = String.make 1 (char_of_int ((i mod 26) + 97)) in
-      let s = if i > 26 then s ^ string_of_int (i / 26) else s in
-      let s = if TVSet.mem v generalized then s else "_" ^ s in
-      let s = (match v with TVty _ -> "'" | TVrow _ -> "!") ^ s in
-      (TVMap.add v s m, i + 1)
-    ) vars (TVMap.empty, 0) in
-    sigma
+  type t =
+    | Tident of tname
+    | Tarrow of TySSet.t * TySSet.t
+    | Tproduct of TySSet.t list
 end
+
+and TyCSet : sig
+  type t = TyC.t list
+  val merge : bool -> t -> t -> t
+  val map : (bool -> TyC.t -> TyC.t) -> bool -> t -> t
+  val map_flatten : (bool -> TyC.t -> t) -> bool -> t -> t
+  val singleton : bool -> TyC.t -> t
+  val need_resolve : bool -> bool -> t -> t -> bool
+end = struct
+  type t = TyC.t list
+  let rec add x l =
+    let open TyC in
+    match x, l with
+    | _, [] -> [x]
+    | Tident n1, Tident n2 :: l1 when Atom.equal n1 n2 -> l
+    | Tarrow (qsa1, qsb1), Tarrow (qsa2, qsb2) :: l1 ->
+      Tarrow (TySSet.union qsa1 qsa2, TySSet.union qsb1 qsb2) :: l1
+    | Tproduct qsl1, Tproduct qsl2 :: l1 when List.length qsl1 = List.length qsl2 ->
+      Tproduct (List.map2 TySSet.union qsl1 qsl2) :: l1
+    | x, y :: l -> y :: add x l
+  let rec merge polarity l1 l2 =
+    match l1 with
+    | [] -> l2
+    | t :: l1 -> merge polarity l1 (add t l2)
+  let rec map f pol l =
+    match l with
+    | [] -> []
+    | t :: l -> add (f pol t) (map f pol l)
+  let rec map_flatten f pol l =
+    match l with
+    | [] -> []
+    | t :: l -> merge pol (f pol t) (map_flatten f pol l)
+  let singleton _ t = [t]
+  let need_resolve _ _ l1 l2 =
+    let open TyC in
+    match l1, l2 with
+    | [], _ | _, [] -> false
+    | [Tident n1], [Tident n2] when Atom.equal n1 n2 -> false
+    | _ -> true
+end
+
+and TyS : sig
+  type t = {
+    id : int ;
+    polarity : bool ;
+    mutable constructors : TyCSet.t ;
+    mutable flow : TySSet.t ;
+  }
+  val compare : t -> t -> int
+  val create : bool -> t
+  val create_flow_pair : unit -> t * t
+  val add_flow_edge : t -> t -> unit
+end = struct
+  type t = {
+    id : int ;
+    polarity : bool ;
+    mutable constructors : TyCSet.t ;
+    mutable flow : TySSet.t ;
+  }
+  let compare x1 x2 = compare x1.id x2.id
+  let r = ref 0
+  let create b =
+    let t = !r in
+    incr r;
+    { id = t ; polarity = b ; constructors = [] ; flow = TySSet.empty }
+  let create_flow_pair () =
+    let q1 = create true in
+    let q2 = create false in
+    q1.flow <- TySSet.singleton q2;
+    q2.flow <- TySSet.singleton q1;
+    (q1, q2)
+  let add_flow_edge q1 q2 =
+    q1.flow <- TySSet.add q2 q1.flow;
+    q2.flow <- TySSet.add q1 q2.flow
+end
+
+and TySSet : Set.S with type elt = TyS.t = Set.Make(TyS)
+
+module TySMap = Map.Make(TyS)
+module TySPSet = Set.Make(struct
+    type t = TyS.t * TyS.t
+    let compare (x1, y1) (x2, y2) =
+      let c = TyS.compare x1 x2 in
+      if c = 0 then TyS.compare y1 y2 else c
+end)
+
+let arrow_option polarity q1 q2 =
+  let w = TyS.create polarity in
+  let qs1 =
+    match q1 with
+    | None -> TySSet.empty
+    | Some q1 -> TySSet.singleton q1
+  in
+  let qs2 = TySSet.singleton q2 in
+  w.TyS.constructors <- TyCSet.singleton polarity (TyC.Tarrow(qs1, qs2));
+  w
+
+let arrow polarity q1 q2 = arrow_option polarity (Some q1) q2
+
+let product polarity l =
+  let w = TyS.create polarity in
+  let qsl = List.map TySSet.singleton l in
+  w.TyS.constructors <- TyCSet.singleton polarity (TyC.Tproduct qsl);
+  w
+
+let ident polarity n =
+  let w = TyS.create polarity in
+  w.TyS.constructors <- TyCSet.singleton polarity (TyC.Tident n);
+  w
+
+let tyc_succ = function
+  | TyC.Tident _ -> TySSet.empty
+  | TyC.Tarrow (q1, q2) -> TySSet.union q1 q2
+  | TyC.Tproduct l -> List.fold_left TySSet.union TySSet.empty l
+
+let tys_succ q =
+  List.fold_left (fun qs t -> TySSet.union qs (tyc_succ t))
+    TySSet.empty q.TyS.constructors
+
+let decompose_flow elms =
+  let fl = TySSet.fold
+      (fun q m -> TySMap.add q (TySSet.inter q.TyS.flow elms) m)
+      elms TySMap.empty in
+  let result = ref [] in
+  let rec loop fl =
+    let best = ref (TySSet.empty, TySSet.empty) in
+    let best_v = ref 0 in
+    TySMap.iter (fun q qs1 ->
+      match TySSet.elements qs1 with
+      | [] -> ()
+      | q2 :: qs ->
+        let qs2 = List.fold_left
+            (fun qs2 q2 -> TySSet.inter qs2 (TySMap.find q2 fl))
+            (TySMap.find q2 fl) qs
+        in
+        let v = (TySSet.cardinal qs1) * (TySSet.cardinal qs2) in
+        if v > !best_v then begin
+          best_v := v;
+          best := (qs1, qs2)
+        end
+    ) fl;
+    if !best_v > 0 then begin
+      let qs1, qs2 = !best in
+      result := (qs1, qs2) :: !result;
+      let fl = TySMap.mapi (fun q qs ->
+        if TySSet.mem q qs1 then
+          TySSet.diff qs qs2
+        else if TySSet.mem q qs2 then
+          TySSet.diff qs qs1
+        else
+          qs
+      ) fl in
+      let fl = TySMap.filter (fun _ qs -> not (TySSet.is_empty qs)) fl in
+      loop fl
+    end
+  in
+  loop fl;
+  !result
+
+let rec print_tyc st level pol ff t =
+  match t with
+  | TyC.Tident n -> Format.fprintf ff "%s" (Atom.hint n)
+  | TyC.Tarrow (qs1, qs2) ->
+    if level >= 3 then Format.fprintf ff "(";
+    Format.fprintf ff "%a ->@ @[<hv>%a@]"
+      (print_tyss st 3 (not pol)) qs1 (print_tyss st 2 pol) qs2;
+    if level >= 3 then Format.fprintf ff ")"
+  | TyC.Tproduct l ->
+    if level >= 4 then Format.fprintf ff "(";
+    List.iteri (fun i qs ->
+        if i > 0 then Format.fprintf ff " *@ ";
+        Format.fprintf ff "%a" (print_tyss st 4 pol) qs
+    ) l;
+    if level >= 4 then Format.fprintf ff ")"
+
+and print_tyss st level pol ff qs =
+  let l = TySSet.elements qs in
+  match l with
+  | [] -> if pol then Format.fprintf ff "Bot" else Format.fprintf ff "Top"
+  | [q] -> print_tys st level ff q
+  | _ ->
+    let lv, op = if pol then 5, "|" else 7, "&" in
+    if level >= lv then Format.fprintf ff "(";
+    List.iteri (fun i q ->
+        if i > 0 then Format.fprintf ff " %s@ " op;
+        Format.fprintf ff "%a" (print_tys st (lv + 1)) q
+    ) l;
+    if level >= lv then Format.fprintf ff ")"
+
+and print_tys st level ff q =
+  let (flow_vars, rec_vars, rec_seen) = st in
+  if TySSet.mem q !rec_seen then
+    Format.fprintf ff "%s" (TySMap.find q rec_vars)
+  else
+    let l1 = List.map (fun t lv -> print_tyc st lv q.TyS.polarity ff t)
+        q.TyS.constructors in
+    let l2 = List.map (fun name _ -> Format.fprintf ff "%s" name)
+        (try TySMap.find q flow_vars with Not_found -> []) in
+    let lev, op = if q.TyS.polarity then 5, "|" else 7, "&" in
+    let finish lv =
+      match l1 @ l2 with
+      | [] -> Format.fprintf ff (if q.TyS.polarity then "Bot" else "Top")
+      | [f] -> f lv
+      | l ->
+        if lv >= lev then Format.fprintf ff "(";
+        List.iteri (fun i f ->
+            if i > 0 then Format.fprintf ff " %s@ " op;
+            f (lev + 1)
+        ) l;
+        if lv >= lev then Format.fprintf ff ")"
+    in
+    if TySMap.mem q rec_vars then begin
+      if level >= 1 then Format.fprintf ff "(";
+      rec_seen := TySSet.add q !rec_seen;
+      finish 1;
+      Format.fprintf ff " as %s" (TySMap.find q rec_vars);
+      if level >= 1 then Format.fprintf ff ")"
+    end else finish level
+
+let make_print_state flow_vars rec_vars =
+  (flow_vars, rec_vars, ref TySSet.empty)
+
+let get_print_name i =
+  let s = String.make 1 (char_of_int ((i mod 26) + 97)) in
+  let s = if i > 26 then s ^ string_of_int (i / 26) else s in
+  "'" ^ s
+
+let prepare_printing l =
+  let needs_rec = ref TySSet.empty in
+  let explored = ref TySSet.empty in
+  let rec loop seen q =
+    if TySSet.mem q seen then
+      needs_rec := TySSet.add q !needs_rec
+    else if TySSet.mem q !explored then
+      ()
+    else begin
+      explored := TySSet.add q !explored;
+      let nseen = TySSet.add q seen in
+      TySSet.iter (loop nseen) (tys_succ q)
+    end
+  in
+  List.iter (loop TySSet.empty) l;
+  let fvs = decompose_flow !explored in
+  let fv = ref TySMap.empty in
+  List.iteri (fun i (qs1, qs2) ->
+      let name = get_print_name i in
+      TySSet.iter (fun q ->
+          fv := TySMap.add q (name ::
+                              try TySMap.find q !fv with Not_found -> []) !fv
+      ) (TySSet.union qs1 qs2)
+    ) fvs;
+  let n = List.length fvs in
+  let recv = ref TySMap.empty in
+  List.iteri (fun i q ->
+      recv := TySMap.add q (get_print_name (i + n)) !recv
+  ) (TySSet.elements !needs_rec);
+  make_print_state !fv !recv
+
+let accessible l =
+  let explored = ref TySSet.empty in
+  let rec loop q =
+    if not (TySSet.mem q !explored) then begin
+      explored := TySSet.add q !explored;
+      TySSet.iter loop (tys_succ q)
+    end
+  in
+  List.iter loop l;
+  !explored
+
+let prepare_copy l =
+  let acc = accessible l in
+  let m = TySSet.fold (fun q m -> TySMap.add q (TyS.create q.TyS.polarity) m)
+      acc TySMap.empty in
+  let tyss_copy = TySSet.map (fun q2 -> TySMap.find q2 m) in
+  let tyc_copy = function
+    | TyC.Tident n -> TyC.Tident n
+    | TyC.Tarrow (qs1, qs2) -> TyC.Tarrow (tyss_copy qs1, tyss_copy qs2)
+    | TyC.Tproduct l -> TyC.Tproduct (List.map tyss_copy l)
+  in
+  TySMap.iter (fun q nq ->
+      nq.TyS.flow <- tyss_copy (TySSet.inter q.TyS.flow acc);
+      nq.TyS.constructors <- List.map tyc_copy q.TyS.constructors
+  ) m;
+  m
+
+let copy st q =
+  TySMap.find q st
+
+let copy_one q =
+  copy (prepare_copy [q]) q

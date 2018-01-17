@@ -21,7 +21,7 @@ val place: lexbuf -> place
    The error message is located at [place]. The error message
    is composed based on [format] and the extra arguments [...]. *)
 
-val error: place -> ('a, out_channel, unit, 'b) format4 -> 'a
+val error: place -> ('a, Format.formatter, unit, unit, unit, 'b) format6 -> 'a
 
 (* [pp_place formatter place] prints a place. It is used by
    [@@deriving show] for data structures that contain places.

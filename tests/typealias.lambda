@@ -1,0 +1,8 @@
+type t = int * int
+type u = A of t
+
+let test = fun x ->
+  match x with
+  | A (a, b) -> let _ = print a in print b
+
+let _ = test (A (42, 17))

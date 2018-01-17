@@ -1,4 +1,4 @@
 let rec fact = fun n ->
   ifzero n then 1 else n * fact (n - 1)
-in
+;;
 print (fact 6)

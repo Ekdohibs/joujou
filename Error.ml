@@ -14,17 +14,17 @@ let column p : int =
 
 let show place : string =
   let startp, endp = place in
-  Printf.sprintf "File \"%s\", line %d, characters %d-%d"
+  Format.sprintf "File \"%s\", line %d, characters %d-%d"
     startp.pos_fname
     (line startp)
     (column startp)
     (endp.pos_cnum - startp.pos_bol) (* intentionally [startp.pos_bol] *)
 
 let display continuation header place format =
-  Printf.fprintf stderr "%s:\n" (show place);
-  Printf.kfprintf
+  Format.eprintf "%s:\n" (show place);
+  Format.kfprintf
     continuation
-    stderr
+    Format.err_formatter
     (header ^^ format ^^ "\n%!")
 
 let error place format =

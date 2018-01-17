@@ -21,7 +21,7 @@ let () = Lexer.add_pragma "disable_type_checking"
     (fun () -> Cook.disable_type_checking := true)
 
 let usage =
-  Printf.sprintf "Usage: %s <options> <filename>" Sys.argv.(0)
+  Format.sprintf "Usage: %s <options> <filename>" Sys.argv.(0)
 
 let () =
   Arg.parse options record usage
@@ -37,13 +37,13 @@ let filenames =
 (* Printing a syntax tree in an intermediate language (for debugging). *)
 
 let print_delimiter () =
-  Printf.eprintf "----------------------------------------";
-  Printf.eprintf "----------------------------------------\n"
+  Format.eprintf "----------------------------------------";
+  Format.eprintf "----------------------------------------\n"
 
 let dump (phase : string) (show : 'term -> string) (t : 'term) =
   if debug then begin
     print_delimiter();
-    Printf.eprintf "%s:\n\n%s\n\n%!" phase (show t)
+    Format.eprintf "%s:\n\n%s\n\n%!" phase (show t)
   end;
   t
 

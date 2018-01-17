@@ -1,2 +1,7 @@
-let rec fact2 = fun n -> fun r -> ifzero n then r else fact2 (n - 1) (n * r) in
+let rec fact2 = fun n -> fun r ->
+  ifzero n then
+    r
+  else
+    fact2 (n - 1) (n * r)
+;;
 print (fact2 7 1)
