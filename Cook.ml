@@ -4,6 +4,7 @@ open Error
 module S = RawLambda
 (* The target calculus. *)
 module T = Lambda
+(* Alias some modules defined in [Lambda] for quicker access. *)
 module TyC = T.TyC
 module TyS = T.TyS
 module TyCSet = T.TyCSet
@@ -11,12 +12,6 @@ module TySSet = T.TySSet
 module TySPSet = T.TySPSet
 
 let disable_type_checking = ref false
-(*
-let ( <|> ) a b =
-  let rec aux a b r =
-    if b <= a then r else aux a (b - 1) ((b - 1) :: r)
-  in aux a b []
-*)
 
 let builtin_int_id = Atom.fresh "int"
 let builtin_int_pos = T.ident true builtin_int_id
@@ -132,65 +127,6 @@ let to_aut polarity ty =
   in
   Hashtbl.iter (fun q _ -> ewalk q) aut.data;
   (root, aut)
-
-let aut_to_type make_var (q, aut) =
-  let open T in
-  let seen = Hashtbl.create 17 in
-  let jm_all polarity =
-    if polarity then List.fold_left tjoin Tbot
-    else List.fold_left tmeet Ttop
-  in
-  let rec walk q =
-    let polarity, head, nxt = Hashtbl.find aut.data q in
-    if Hashtbl.mem seen q then begin
-      match Hashtbl.find seen q with
-      | None -> let tv = TV.create () in
-        Hashtbl.replace seen q (Some tv);
-        Tvar tv
-      | Some tv -> Tvar tv
-    end else begin
-      Hashtbl.add seen q None;
-      let head = AHSet.elements head in
-      let nty = List.map (function
-          | HVar id -> Tvar (make_var id)
-          | HIdent n -> Tident n
-          | HArrow ->
-            let src = List.map walk
-                (ISet.elements (ALMap.find LArrowsrc nxt)) in
-            let dst = List.map walk
-                (ISet.elements (ALMap.find LArrowdst nxt)) in
-            Tarrow (jm_all (not polarity) src, Rempty, jm_all polarity dst)
-          | HTuple arity ->
-            let l = List.map (fun i ->
-                jm_all polarity (List.map walk
-                  (ISet.elements (ALMap.find (LTuple (arity, i)) nxt)))
-            ) (0 <|> arity) in
-            Tproduct l
-        ) head in
-      let ty = jm_all polarity nty in
-      let r = match Hashtbl.find seen q with
-        | None -> ty
-        | Some tv -> Trec(tv, ty)
-      in
-      Hashtbl.remove seen q;
-      r
-    end
-  in
-  walk q
-
-let var_maker () =
-  let vars = Hashtbl.create 17 in
-  let make_var id =
-    try Hashtbl.find vars id
-    with Not_found ->
-      let v = TV.create () in
-      Hashtbl.add vars id v;
-      v
-  in
-  make_var
-
-let from_aut aut =
-  aut_to_type (var_maker ()) aut
 *)
 
 type scheme = {
@@ -223,7 +159,6 @@ type env = {
 
 let base_env = {
   bindings = Smap.empty ;
-  (*  fvars = TVSet.empty ; *)
   type_bindings = Smap.singleton "int" builtin_int_id ;
   type_defs = Atom.Map.singleton builtin_int_id (TBaseType builtin_int_id) ;
   constructor_bindings = Smap.empty ;
@@ -237,12 +172,15 @@ let print_scheme ff { hypotheses ; typ } =
   let l = typ :: (List.map (fun (_, (st, _)) -> st)
                     (Atom.Map.bindings hypotheses)) in
   let st = T.prepare_printing l in
-  Format.fprintf ff "[@[<hov 2>";
-  List.iteri (fun i (a, (ty, _)) ->
-      if i > 0 then Format.fprintf ff ",@ ";
-      Format.fprintf ff "%s : %a" (Atom.hint a) (T.print_tys st 0) ty
+  if not (Atom.Map.is_empty hypotheses) then begin
+    Format.fprintf ff "[@[<hov 2>";
+    List.iteri (fun i (a, (ty, _)) ->
+        if i > 0 then Format.fprintf ff ",@ ";
+        Format.fprintf ff "%s : %a" (Atom.hint a) (T.print_tys st 0) ty
     ) (Atom.Map.bindings hypotheses);
-  Format.fprintf ff "@]] %a" (T.print_tys st 0) typ
+    Format.fprintf ff "@]] "
+  end;
+  Format.fprintf ff "%a" (T.print_tys st 0) typ
 
 let rec resolve env polarity t =
   match t with
@@ -355,8 +293,6 @@ let add id env =
 
 let add_gen id scheme env =
   let a = Atom.fresh id in
-(*  let fv = fvars_scheme scheme in
-    TVSet.iter TV.lock_t fv; *)
   let nenv = { env with bindings = Smap.add id (BScheme scheme, a) env.bindings } in
   (nenv, a)
 
@@ -590,10 +526,6 @@ and cook_pattern env mapped_vars ty { S.value ; S.place } =
       | None, None -> None
       | Some (a1, ty1), Some (a2, ty2) ->
         assert (Atom.equal a1 a2);
-(*        (if not !disable_type_checking then
-          try unify env ty1 ty2 with
-          | UnificationFailure (ty1_, ty2_) ->
-            error place "The variable %s on the left-hand side of this | pattern has type %s but on the right-hand side it has type %s\nThe type %s is incompatible with the type %s" x (T.show_typ (Ty.canon ty1)) (T.show_typ (Ty.canon ty2)) (T.show_typ (Ty.canon ty1_)) (T.show_typ (Ty.canon ty2_))); *)
         let wp, wn = TyS.create_flow_pair () in
         check_biunify place env ty1 wn;
         check_biunify place env ty2 wn;
@@ -704,11 +636,6 @@ let rec cook_type env polarity { S.place ; S.value } =
   | S.TTuple l ->
     T.product polarity
       (List.map (cook_type env polarity) l)
-(*
-let print_schema ff { vars ; typ } =
-  let fv = Ty.fvars typ in
-  Ty.print (TV.get_print_names fv vars) 0 ff typ
-*)
 
 let rec cook_program env = function
   | { S.value = S.DTerm t ; _ } :: p ->
