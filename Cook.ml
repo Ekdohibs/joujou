@@ -7,8 +7,10 @@ module T = Lambda
 (* Alias some modules defined in [Lambda] for quicker access. *)
 module TyC = T.TyC
 module TyS = T.TyS
+module TyE = T.TyE
 module TyCSet = T.TyCSet
 module TySSet = T.TySSet
+module TyESet = T.TyESet
 module TySPSet = T.TySPSet
 
 let disable_type_checking = ref false
@@ -16,6 +18,8 @@ let disable_type_checking = ref false
 let builtin_int_id = Atom.fresh "int"
 let builtin_int_pos = T.ident true builtin_int_id
 let builtin_int_neg = T.ident false builtin_int_id
+
+let builtin_io_id = Atom.fresh "io"
 
 (*
 let head_merge polarity head1 head2 =
@@ -133,6 +137,7 @@ type scheme = {
   (* First place where the variable was used, for error reporting. *)
   hypotheses : (TyS.t * place) Atom.Map.t ;
   typ : TyS.t ;
+  eff : TyE.t ;
 }
 
 type binding =
@@ -168,10 +173,10 @@ let base_env = {
   free_effect_tag = 0 ;
 }
 
-let print_scheme ff { hypotheses ; typ } =
+let print_scheme ff { hypotheses ; typ ; eff } =
   let l = typ :: (List.map (fun (_, (st, _)) -> st)
                     (Atom.Map.bindings hypotheses)) in
-  let st = T.prepare_printing l in
+  let st = T.prepare_printing l [eff] in
   if not (Atom.Map.is_empty hypotheses) then begin
     Format.fprintf ff "[@[<hov 2>";
     List.iteri (fun i (a, (ty, _)) ->
@@ -180,7 +185,8 @@ let print_scheme ff { hypotheses ; typ } =
     ) (Atom.Map.bindings hypotheses);
     Format.fprintf ff "@]] "
   end;
-  Format.fprintf ff "%a" (T.print_tys st 0) typ
+  Format.fprintf ff "%a" (T.print_tys st 0) typ;
+  Format.fprintf ff " !{%a}" (T.print_eff st 0 true) eff
 
 let rec resolve env polarity t =
   match t with
@@ -252,15 +258,69 @@ and biunify_tyss env t qps qms =
     ) qms
   ) qps
 
+(*
+and biunify_eff env t (effp, defp) (effm, defm) =
+  let efe = Atom.Map.merge (fun _ ep em ->
+      let ep = match ep with None -> defp | Some ep -> ep in
+      let em = match em with None -> defm | Some em -> em in
+        Some (biunify_ep env t ep em (fun () -> assert false (* TODO *)))
+    ) effp effm in biunify_ep env t defp defm (fun () -> assert false)
+
+and biunify_ep env t ep em err =
+  match ep, em with
+  | TyC.NotPresent, _ | _, TyC.Present -> ep, em
+  | TyC.Present, TyC.NotPresent -> err ()
+  | TyC.Pvar qps, TyC.Pvar qms ->
+    (* These should contain only effect variables: can use the standard tyss *)
+    biunify_tyss env t qps qms;
+    ep, em
+  | TyC.Present, _ -> TyC.Present, TyC.Present
+  | _, TyC.NotPresent -> TyC.NotPresent, TyC.NotPresent
+*)
+
+and merge_eff env name e1 e2 =
+  let open TyE in
+  assert (e1.polarity = e2.polarity);
+  (match name with
+   | None -> () | Some name -> extend name e1; extend name e2);
+  let get e =
+    match name with
+    | None -> snd e.flows
+    | Some name -> Atom.Map.find name (fst e.flows)
+  in
+  let es1, b1 = get e1 in
+  let es2, b2 = get e2 in
+  let es = TyESet.diff es2 es1 in
+  TyESet.iter (add_flow_edge name e1) es;
+  match name with
+  | None -> assert (not b1 && not b2)
+  | Some name -> e1.flows <- (Atom.Map.add name (fst (get e1), b1 || b2) (fst e1.flows), snd e1.flows)
+
+and biunify_eff_excl ex env t ep em =
+  TyE.common_domain ep em;
+  assert (ep.TyE.polarity && not em.TyE.polarity);
+  let (epf, epd) = ep.TyE.flows in
+  let (emf, emd) = em.TyE.flows in
+  Atom.Map.iter (fun name (es, _) -> if not (Atom.Set.mem name ex) then TyESet.iter (fun e -> merge_eff env (Some name) e ep) es) emf;
+  Atom.Map.iter (fun name (es, _) -> if not (Atom.Set.mem name ex) then TyESet.iter (fun e -> merge_eff env (Some name) e em) es) epf;
+  TyESet.iter (fun e -> merge_eff env None e ep) (fst emd);
+  TyESet.iter (fun e -> merge_eff env None e em) (fst epd);
+  assert (not (snd epd) && not (snd emd))
+  (*;  Atom.Map.iter (fun name (_, bp) -> let (_, bm) = Atom.Map.find name emf in
+                assert (bm || not bp) (*todo nice error*)) epf
+  *)
+and biunify_eff env = biunify_eff_excl Atom.Set.empty env
+
 and biunify_tyc env t tp tm =
   let open TyC in
   match tp, tm with
   | Tident n1, Tident n2 ->
     if not (Atom.equal n1 n2) then
       biunification_error tp tm
-  | Tarrow (tpa, tpb), Tarrow (tma, tmb) ->
+  | Tarrow (tpa, effp, tpb), Tarrow (tma, effm, tmb) ->
     biunify_tyss env t tma tpa;
-    biunify_tyss env t tpb tmb
+    biunify_tyss env t tpb tmb;
+    biunify_eff env t effp effm
   | Tproduct l1, Tproduct l2 ->
     if List.length l1 = List.length l2 then
       List.iter2 (biunify_tyss env t) l1 l2
@@ -268,6 +328,8 @@ and biunify_tyc env t tp tm =
       biunification_error tp tm
   | _, _ -> biunification_error tp tm
 
+let biunify_eff_excl excl env = biunify_eff_excl excl env (ref TySPSet.empty)
+let biunify_eff env = biunify_eff env (ref TySPSet.empty)
 let biunify env = biunify_tys env (ref TySPSet.empty)
 
 let check_biunify_msg msg place env t1 t2 =
@@ -276,13 +338,29 @@ let check_biunify_msg msg place env t1 t2 =
     | BiUnificationFailure (ty1, ty2) ->
       let st = T.prepare_printing
           ([t1; t2] @
-           TySSet.(elements (union (T.tyc_succ ty1) (T.tyc_succ ty2))))
+           TySSet.(elements (union (T.tyc_succ ty1) (T.tyc_succ ty2)))) []
       in
       error place msg (T.print_tys st 0) t1 (T.print_tys st 0) t2
         (T.print_tyc st 0 true) ty1 (T.print_tyc st 0 false) ty2
 
 let check_biunify =
   check_biunify_msg "This expression has type %a but was expected of type %a\nThe type %a is not a subtype of the type %a"
+
+let check_biunify_eff_excl_msg msg excl place env t1 t2 =
+  if not !disable_type_checking then
+    try biunify_eff_excl excl env t1 t2 with
+    | BiUnificationFailure (ty1, ty2) ->
+(*      let st = T.prepare_printing
+          ([t1; t2] @
+           TySSet.(elements (union (T.tyc_succ ty1) (T.tyc_succ ty2))))
+      in
+      error place msg (T.print_tys st 0) t1 (T.print_tys st 0) t2
+        (T.print_tyc st 0 true) ty1 (T.print_tyc st 0 false) ty2 *) assert false
+
+let check_biunify_eff_excl =
+  check_biunify_eff_excl_msg "This expression has type %a but was expected of type %a\nThe type %a is not a subtype of the type %a"
+
+let check_biunify_eff = check_biunify_eff_excl Atom.Set.empty
 
 let add_bound id a env =
   { env with bindings = Smap.add id (BInfer, a) env.bindings }
@@ -291,19 +369,24 @@ let add id env =
   let a = Atom.fresh id in
   add_bound id a env, a
 
+let empty_eff polarity =
+  TyE.create polarity
+
 let add_gen id scheme env =
   let a = Atom.fresh id in
+  let scheme = { scheme with eff = empty_eff true } in
   let nenv = { env with bindings = Smap.add id (BScheme scheme, a) env.bindings } in
   (nenv, a)
 
-let copy_scheme { hypotheses ; typ } =
+let copy_scheme { hypotheses ; typ ; eff } =
   let l = typ :: (List.map (fun (_, (st, _)) -> st)
-                    (Atom.Map.bindings hypotheses)) in
-  let st = T.prepare_copy l in
+                           (Atom.Map.bindings hypotheses)) in
+  let st = T.prepare_copy l [eff] in
   {
     hypotheses = Atom.Map.map
         (fun (ty, place) -> (T.copy st ty, place)) hypotheses ;
     typ = T.copy st typ ;
+    eff = T.eff_copy st eff ;
   }
 
 let find place id env =
@@ -315,6 +398,7 @@ let find place id env =
     let sc = {
       hypotheses = Atom.Map.singleton a (tyn, place) ;
       typ = typ ;
+      eff = empty_eff true ;
     } in
     sc, a
 
@@ -338,22 +422,27 @@ let rec cook_term env { S.place ; S.value } =
       with Not_found ->
         sc.hypotheses, None
     in
-    let w = T.arrow_option true src sc.typ in
+    let w = T.arrow_option true src sc.eff sc.typ in
     let nsc = {
       hypotheses = nh ;
       typ = w ;
+      eff = empty_eff true ;
     } in
     nsc, T.Lam (T.NoSelf, x, t)
   | S.App (t1, t2) ->
     let sc1, nt1 = cook_term env t1 in
     let sc2, nt2 = cook_term env t2 in
     let (wp, wn) = TyS.create_flow_pair () in
-    let w = T.arrow false sc2.typ wn in
+    let (ep, en) = TyE.create_flow_pair () in
+    let w = T.arrow false sc2.typ en wn in
     let nh = unify_hyp env sc1.hypotheses sc2.hypotheses in
     check_biunify t1.S.place env sc1.typ w;
+    check_biunify_eff t1.S.place env sc1.eff en;
+    check_biunify_eff t2.S.place env sc2.eff en;
     let nsc = {
       hypotheses = nh ;
       typ = wp ;
+      eff = ep ;
     } in
     nsc, T.App (nt1, nt2)
   | S.Lit i ->
@@ -361,6 +450,7 @@ let rec cook_term env { S.place ; S.value } =
     let sc = {
       hypotheses = Atom.Map.empty ;
       typ = w ;
+      eff = empty_eff true ;
     } in
     sc, T.Lit i
   | S.BinOp (t1, op, t2) ->
@@ -369,27 +459,42 @@ let rec cook_term env { S.place ; S.value } =
     let nh = unify_hyp env sc1.hypotheses sc2.hypotheses in
     let w1 = T.ident true builtin_int_id in
     let w2 = T.ident false builtin_int_id in
+    let (ep, en) = TyE.create_flow_pair () in
     check_biunify t1.S.place env sc1.typ w2;
     check_biunify t2.S.place env sc2.typ w2;
+    check_biunify_eff t1.S.place env sc1.eff en;
+    check_biunify_eff t2.S.place env sc2.eff en;
     let sc = {
       hypotheses = nh ;
       typ = w1 ;
+      eff = ep ;
     } in
     sc, T.BinOp (nt1, op, nt2)
   | S.Print t ->
     let sc, nt = cook_term env t in
     let w1 = T.ident false builtin_int_id in
+    let (ep, en) = TyE.create_flow_pair () in
+    let e = TyE.create true in
+    e.TyE.flows <- (Atom.Map.singleton builtin_io_id (TyESet.empty, true), (TyESet.empty, false));
+(*    check_biunify_eff t.S.place env
+      (Atom.Map.singleton builtin_io_id TyC.Present, TyC.NotPresent) en; *)
+    (* TODO *)
     check_biunify t.S.place env sc.typ w1;
-    (* TODO: print produces io effect *)
-    sc, T.Print nt
+    check_biunify_eff t.S.place env sc.eff en;
+    check_biunify_eff t.S.place env e en;
+    { sc with eff = ep }, T.Print nt
   | S.Let (recursive, x, t1, t2) ->
     let nenv, x, sc1, nt1 = cook_let env recursive x t1 in
     (* Format.eprintf "val %s : @[<hv>%a@]@." (Atom.hint x) print_scheme sc1; *)
     let sc2, nt2 = cook_term nenv t2 in
+    let (ep, en) = TyE.create_flow_pair () in
+    check_biunify_eff t1.S.place env sc1.eff en;
+    check_biunify_eff t2.S.place env sc2.eff en;
     let nh = unify_hyp env sc1.hypotheses sc2.hypotheses in
     let nsc = {
       hypotheses = nh ;
       typ = sc2.typ ;
+      eff = ep ;
     } in
     nsc, T.Let (x, nt1, nt2)
   | S.IfZero (t1, t2, t3) ->
@@ -399,22 +504,30 @@ let rec cook_term env { S.place ; S.value } =
     let nh = unify_hyp env sc1.hypotheses
         (unify_hyp env sc2.hypotheses sc3.hypotheses) in
     let (wp, wn) = TyS.create_flow_pair () in
+    let (ep, en) = TyE.create_flow_pair () in
     let w = T.ident false builtin_int_id in
     check_biunify t1.S.place env sc1.typ w;
     check_biunify t2.S.place env sc2.typ wn;
     check_biunify t3.S.place env sc3.typ wn;
+    check_biunify_eff t1.S.place env sc1.eff en;
+    check_biunify_eff t2.S.place env sc2.eff en;
+    check_biunify_eff t3.S.place env sc3.eff en;
     let nsc = {
       hypotheses = nh ;
       typ = wp ;
+      eff = ep ;
     } in
     nsc, T.IfZero (nt1, nt2, nt3)
   | S.Tuple l ->
     let l = List.map (cook_term env) l in
     let nh = unify_hyp_many env (List.map (fun (sc, _) -> sc.hypotheses) l) in
     let w = T.product true (List.map (fun (sc, _) -> sc.typ) l) in
+    let (ep, en) = TyE.create_flow_pair () in
+    List.iter (fun (sc, _) -> check_biunify_eff place env sc.eff en) l;
     let nsc = {
       hypotheses = nh ;
       typ = w ;
+      eff = ep ;
     } in
     nsc, (T.Tuple (List.map snd l))
   | S.Constructor (x, t) ->
@@ -438,32 +551,44 @@ let rec cook_term env { S.place ; S.value } =
         error place "The constructor %s expects %d argument(s), but is applied here to %d argument(s)" x n m
     in
     let args = List.map (fun t -> t.S.place, cook_term env t) args in
+    let (ep, en) = TyE.create_flow_pair () in
     let nh = unify_hyp_many env
         (List.map (fun (_, (sc, _)) -> sc.hypotheses) args) in
     List.iter2 (fun (place, (sc, _)) (_, enty) ->
-        check_biunify place env sc.typ (T.copy_one enty)
+        check_biunify place env sc.typ (T.copy_one enty);
+        check_biunify_eff place env sc.eff en;
     ) args cargs;
     let nt =
-      if is_effect then
+      if is_effect then begin
         let (_, (npt, _), _) = Atom.Map.find tname env.effect_defs in
+        let e = TyE.create true in
+        e.TyE.flows <- (Atom.Map.singleton tname (TyESet.empty, true), (TyESet.empty, false));
+        check_biunify_eff place env e en;
         T.copy_one npt
-      else
+      end else
         T.ident true tname
     in
     let nsc = {
       hypotheses = nh ;
       typ = nt ;
+      eff = ep ;
     } in
     nsc, T.Constructor ((catom, ctag, is_effect),
                         List.map (fun (_, (_, t)) -> t) args)
   | S.Match (t, l) ->
     let sc, nt = cook_term env t in
     let rtyp, rtyn = TyS.create_flow_pair () in
+    let ep, en = TyE.create_flow_pair () in
+    let erp, ern = TyE.create_flow_pair () in
+    check_biunify_eff t.S.place env sc.eff en;
+    let matched_effects = ref Atom.Set.empty in
     let nl = List.map (fun (p, t1) ->
-      let np, dv = cook_pattern_or_effect env sc.typ rtyp p in
+      let np, dv, ef = cook_pattern_or_effect env sc.typ rtyp erp p in
+      matched_effects := Atom.Set.union !matched_effects ef;
       let nenv = Smap.fold (fun x (a, t) env -> add_bound x a env) dv env in
       let sc1, nt1 = cook_term nenv t1 in
       check_biunify t1.S.place env sc1.typ rtyn;
+      check_biunify_eff t1.S.place env sc1.eff en;
       let nh = Smap.fold (fun _ (a, t) h ->
           try
             let ty, place = Atom.Map.find a h in
@@ -473,17 +598,22 @@ let rec cook_term env { S.place ; S.value } =
       ) dv sc1.hypotheses in
       (nh, (np, nt1))
     ) l in
+    (*    ern.TyS.constructors <- TyCSet.singleton false (TyC.Teffect !matched_effects); *)
+    Atom.Set.iter (fun name -> TyE.extend name ep) !matched_effects;
+    Atom.Set.iter (fun name -> TyE.extend name ern) !matched_effects;
+    check_biunify_eff_excl !matched_effects place env ep ern;
     let nsc = {
       hypotheses = List.fold_left
           (fun h1 (h2, _) -> unify_hyp env h1 h2) sc.hypotheses nl ;
       typ = rtyp ;
+      eff = erp ;
     } in
     nsc, T.Match (nt, List.map snd nl)
 
-and cook_pattern_or_effect env ty rty = function
+and cook_pattern_or_effect env ty rty ep = function
   | S.Pattern p ->
     let p, dv = cook_pattern env Smap.empty ty p in
-    T.Pattern p, dv
+    T.Pattern p, dv, Atom.Set.empty
   | S.Effect ({ S.value = c ; S.place }, p, k) ->
     let catom =
       try Smap.find c env.constructor_bindings
@@ -506,10 +636,10 @@ and cook_pattern_or_effect env ty rty = function
       | Some _, None ->
         error place "The effect constructor %s expects 0 arguments, but is applied here to 1 argument" c
     in
-    (* TODO *)
-    let kty = T.arrow true ty2n rty in
+    (* For now, assure this means the effect is matched (no exhausitivty checking). TODO: define correctly the type of kty *)
+    let kty = T.arrow true ty2n ep rty in
     let kv = Atom.fresh k in
-      T.Effect (np, kv), (Smap.add k (kv, kty) dv)
+      T.Effect (np, kv), (Smap.add k (kv, kty) dv), Atom.Set.singleton ename
 
 and cook_pattern env mapped_vars ty { S.value ; S.place } =
   match value with
@@ -589,6 +719,7 @@ and cook_let env recursive x t =
   | S.NonRecursive, t ->
     let sc, t = cook_term env t in
     let nenv, nx = add_gen x sc env in
+    (*    Format.eprintf "val %s : @[<hv>%a@]@." x print_scheme sc; *)
     (nenv, nx, copy_scheme sc, t)
   | S.Recursive, { S.value = S.Lam (y, t) ; _ } ->
     let sc, nx, ny, nt =
@@ -602,7 +733,7 @@ and cook_let env recursive x t =
         with Not_found ->
           sc.hypotheses, None
       in
-      let w = T.arrow_option true src sc.typ in
+      let w = T.arrow_option true src sc.eff sc.typ in
       let nh =
         try
           let ty, _ = Atom.Map.find nx nh in
@@ -613,6 +744,7 @@ and cook_let env recursive x t =
       let nsc = {
         hypotheses = nh ;
         typ = w ;
+        eff = empty_eff true ;
       } in
       nsc, nx, ny, nt
     in
@@ -632,6 +764,7 @@ let rec cook_type env polarity { S.place ; S.value } =
   | S.TArrow (t1, t2) -> (* TODO *)
     T.arrow polarity
       (cook_type env (not polarity) t1)
+      (empty_eff true)
       (cook_type env polarity t2)
   | S.TTuple l ->
     T.product polarity
