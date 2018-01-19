@@ -99,3 +99,17 @@ let run_state = fun f ->
   | effect Set s k -> fun _ -> k 0 s
 
 let _ = run_state test_state 23
+
+let test5 = fun f ->
+  match f 0 with
+  | x -> 3 * x
+  | effect Get k -> k (3 * Get + 1)
+
+let test6 = fun _ -> test5 (fun _ -> Get)
+
+let test7 = fun f ->
+  match f 0 with
+  | x -> 3 * x + 2
+  | effect Get k -> k 1
+
+let _ = print (test7 test6)

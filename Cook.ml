@@ -588,7 +588,7 @@ let rec cook_term env { S.place ; S.value } =
       let nenv = Smap.fold (fun x (a, t) env -> add_bound x a env) dv env in
       let sc1, nt1 = cook_term nenv t1 in
       check_biunify t1.S.place env sc1.typ rtyn;
-      check_biunify_eff t1.S.place env sc1.eff en;
+      check_biunify_eff t1.S.place env sc1.eff ern;
       let nh = Smap.fold (fun _ (a, t) h ->
           try
             let ty, place = Atom.Map.find a h in
