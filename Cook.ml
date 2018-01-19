@@ -293,7 +293,11 @@ and merge_eff env name e1 e2 =
   let es = TyESet.diff es2 es1 in
   TyESet.iter (add_flow_edge name e1) es;
   match name with
-  | None -> assert (not b1 && not b2)
+  | None ->
+    if e1.polarity then
+      assert (not b1 && not b2)
+    else
+      e1.flows <- (fst e1.flows, (fst (snd e1.flows), b1 || b2))
   | Some name -> e1.flows <- (Atom.Map.add name (fst (get e1), b1 || b2) (fst e1.flows), snd e1.flows)
 
 and biunify_eff_excl ex env t ep em =
@@ -305,10 +309,10 @@ and biunify_eff_excl ex env t ep em =
   Atom.Map.iter (fun name (es, _) -> if not (Atom.Set.mem name ex) then TyESet.iter (fun e -> merge_eff env (Some name) e em) es) epf;
   TyESet.iter (fun e -> merge_eff env None e ep) (fst emd);
   TyESet.iter (fun e -> merge_eff env None e em) (fst epd);
-  assert (not (snd epd) && not (snd emd))
-  (*;  Atom.Map.iter (fun name (_, bp) -> let (_, bm) = Atom.Map.find name emf in
-                assert (bm || not bp) (*todo nice error*)) epf
-  *)
+  assert (not (snd epd));
+  Atom.Map.iter (fun name (_, bp) -> let (_, bm) = Atom.Map.find name emf in
+                assert (not bm || not bp) (*todo nice error*)) epf
+
 and biunify_eff env = biunify_eff_excl Atom.Set.empty env
 
 and biunify_tyc env t tp tm =
@@ -370,7 +374,9 @@ let add id env =
   add_bound id a env, a
 
 let empty_eff polarity =
-  TyE.create polarity
+  let w = TyE.create polarity in
+  w.TyE.flows <- (Atom.Map.empty, (TyESet.empty, not polarity));
+  w
 
 let add_gen id scheme env =
   let a = Atom.fresh id in
@@ -764,7 +770,7 @@ let rec cook_type env polarity { S.place ; S.value } =
   | S.TArrow (t1, t2) -> (* TODO *)
     T.arrow polarity
       (cook_type env (not polarity) t1)
-      (empty_eff true)
+      (empty_eff polarity)
       (cook_type env polarity t2)
   | S.TTuple l ->
     T.product polarity

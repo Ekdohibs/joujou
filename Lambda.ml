@@ -145,8 +145,10 @@ end = struct
     (qp, qm)
   let merge pol t1 t2 =
     let q = create pol in
-    assert (snd (snd t1.flows) = false);
-    assert (snd (snd t2.flows) = false);
+    if pol then begin
+      assert (snd (snd t1.flows) = false);
+      assert (snd (snd t2.flows) = false)
+    end;
     common_domain t1 t2;
     let m = Atom.Map.merge (fun _ u1 u2 ->
         match u1, u2 with
@@ -154,8 +156,10 @@ end = struct
         | None, Some u | Some u, None -> Some u
         | Some (qs1, b1), Some (qs2, b2) ->
           Some (TyESet.union qs1 qs2, b1 || b2)
-      ) (fst t1.flows) (fst t2.flows) in
-    q.flows <- (m, (TyESet.empty, false));
+      ) (fst t1.flows) (fst t2.flows)
+    in
+    let b = snd (snd t1.flows) || snd (snd t2.flows) in
+    q.flows <- (m, (TyESet.empty, b));
     Atom.Map.iter (fun name (qs, _) ->
       TyESet.iter (add_flow_edge (Some name) q) qs;
     ) m;
@@ -468,7 +472,7 @@ and print_eff st level pol ff t = (* TODO *)
   Format.fprintf ff "%a}" (print_ep st 6 pol None) def
 
 and print_ep st level pol name ff (es, b) =
-  if b then Format.fprintf ff "yes" else Format.fprintf ff "any";
+  if b then Format.fprintf ff (if pol then "yes" else "no") else Format.fprintf ff "any";
   let _, _, _, (enamee, enamed) = st in
   let mp = match name with None -> enamed | Some name -> Atom.Map.find name enamee in
   let get t = try TyEMap.find t mp with Not_found -> [] in

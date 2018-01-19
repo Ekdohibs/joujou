@@ -1,0 +1,12 @@
+type t = A of (int -> int)
+
+let f1 = fun x -> x
+let f2 = fun x -> print x
+
+let run = fun a ->
+  match a with
+  | A (f) -> f 0
+
+let _ = run (A f1)
+(* the following line should not typecheck *)
+(* let _ = run (A f2) *)
