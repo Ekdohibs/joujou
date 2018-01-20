@@ -331,18 +331,32 @@ let define (decl : T.declaration) (st : finish_state) (t : S.term) : decl_or_fun
 
 let define_ordinary_function (st : finish_state) (S.Fun (f, xs, t)) : decl_or_fun =
   let b = fct_max_total_alloc t in
-  let chk = ecall (T.Name "gc_check_size") [iconst b] in
-  let gc_msg = scall (T.Name "gc_debug") [T.Literal "Calling gc at line %d.\\n" ; T.Name "__LINE__"] in
-  let set_num_roots = scall (T.Name "gc_set_num_roots") [iconst (List.length xs)] in
-  let save_vars = List.mapi (fun i x -> scall (T.Name "gc_set_root") [iconst i; evar x]) xs in
-  let collect = scall (T.Name "gc_small_collection") [] in
-  let restore_vars = List.mapi (fun i x -> T.Expr (T.Assign (evar x, ecall (T.Name "gc_get_root") [iconst i]))) xs in
-  let checkblk = T.If (chk, T.Compound (gc_msg :: set_num_roots :: save_vars @ [collect] @ restore_vars)) in
+  let t = finish_term st t in
+  let body =
+    if b = 0 then
+      T.Compound [t]
+    else
+      let chk = ecall (T.Name "gc_check_size") [iconst b] in
+      let gc_msg = scall (T.Name "gc_debug")
+          [T.Literal "Calling gc at line %d.\\n" ; T.Name "__LINE__"] in
+      let set_num_roots =
+        scall (T.Name "gc_set_num_roots") [iconst (List.length xs)] in
+      let save_vars =
+        List.mapi (fun i x ->
+            scall (T.Name "gc_set_root") [iconst i; evar x]) xs in
+      let collect = scall (T.Name "gc_small_collection") [] in
+      let restore_vars =
+        List.mapi (fun i x ->
+            T.Expr (T.Assign (evar x,
+                              ecall (T.Name "gc_get_root") [iconst i]))) xs
+      in
+      T.Compound [T.If (chk, T.Compound (gc_msg :: set_num_roots :: save_vars @ [collect] @ restore_vars)); t]
+  in
   T.Function (
     [],
     false,
     (declare_ordinary_function f xs),
-    T.Compound [checkblk; finish_term st t]
+    body
   )
 
 let define_main_function (st : finish_state) (t : S.term) : decl_or_fun =
