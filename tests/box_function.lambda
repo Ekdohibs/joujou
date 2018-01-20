@@ -5,8 +5,10 @@ let f2 = fun x -> print x
 
 let run = fun a ->
   match a with
-  | A (f) -> f 0
+  | A f -> f 0
 
-let _ = run (A f1)
+let box = fun f -> A f
+
+let _ = run (box f1)
 (* the following line should not typecheck *)
-(* let _ = run (A f2) *)
+(* let _ = run (box f2) *)

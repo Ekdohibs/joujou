@@ -178,8 +178,15 @@ match_case:
 
 pattern_:
 | p1 = pattern BAR p2 = pattern { POr (p1, p2) }
-| p = simple_pattern COMMA l = separated_nonempty_list(COMMA, simple_pattern)
+| p = application_pattern COMMA l = separated_nonempty_list(COMMA, application_pattern)
     { PTuple (p :: l) }
+| p = application_pattern_ { p }
+
+%inline application_pattern:
+| p = placed(application_pattern_) { p }
+
+application_pattern_:
+| x = UIDENT p = simple_pattern { PConstructor (x, Some p) }
 | p = simple_pattern_ { p }
 
 %inline simple_pattern:
@@ -188,7 +195,8 @@ pattern_:
 simple_pattern_:
 | LPAREN p = pattern_ RPAREN { p }
 | x = IDENT { PVar x }
-| x = UIDENT p = ioption(simple_pattern) { PConstructor (x, p) }
+| x = UIDENT { PConstructor (x, None) } %prec prec_constant_constructor
+(* | x = UIDENT p = ioption(simple_pattern) { PConstructor (x, p) } *)
 
 (* -------------------------------------------------------------------------- *)
 
