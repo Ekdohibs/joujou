@@ -443,6 +443,8 @@ let decompose_flow_e name elms =
   loop fl;
   !result
 
+module SSet = Set.Make(String)
+
 let rec print_tyc st level pol ff t =
   match t with
   | TyC.Tident n -> Format.fprintf ff "%s" (Atom.hint n)
@@ -461,22 +463,46 @@ let rec print_tyc st level pol ff t =
     ) l;
     if level >= 4 then Format.fprintf ff ")"
 
-and print_eff st level pol ff t = (* TODO *)
+and print_eff st level pol ff t =
   let eff, def = t.TyE.flows in
-  let _, _, _, (enamee, _) = st in
+  let _, _, _, (enamee, enamed) = st in
   let get name = try Atom.Map.find name eff with Not_found -> def in
-  Format.fprintf ff "{";
-  Atom.Map.iter (fun name _ -> Format.fprintf ff "%s : %a | " (Atom.hint name) (print_ep st 6 pol (Some name)) (get name)) enamee;
-(*  Atom.Map.iter (fun a p -> Format.fprintf ff "%s : %a | "
-                    (Atom.hint a) (print_ep st 6 pol) p) eff; *)
-  Format.fprintf ff "%a}" (print_ep st 6 pol None) def
+  let l = List.map (fun (name, _) -> (Some name, get name))
+      (Atom.Map.bindings enamee) @ [(None, def)] in
+  let printed = ref false in
+  List.iteri (fun i (name, d) ->
+      printed := print_ep st 6 pol name ff d !printed
+    ) l
 
-and print_ep st level pol name ff (es, b) =
-  if b then Format.fprintf ff (if pol then "yes" else "no") else Format.fprintf ff "any";
+and print_ep st level pol name ff (es, b) needs_sep =
   let _, _, _, (enamee, enamed) = st in
   let mp = match name with None -> enamed | Some name -> Atom.Map.find name enamee in
-  let get t = try TyEMap.find t mp with Not_found -> [] in
-  TyESet.iter (fun x -> List.iter (Format.fprintf ff " %s") (get x)) es
+  let get t = try TyEMap.find t mp with Not_found -> SSet.empty in
+  let fv = List.fold_left SSet.union SSet.empty
+      (List.map get (TyESet.elements es)) in
+  if SSet.is_empty fv && pol && not b then
+    false
+  else if SSet.is_empty fv && (pol || not b) then begin
+    match name with
+    | None -> false
+    | Some name ->
+      if needs_sep then Format.fprintf ff " | ";
+      Format.fprintf ff "%s" (Atom.hint name);
+      true
+  end else begin
+    if needs_sep then Format.fprintf ff " | ";
+    (match name with
+     | None -> ()
+     | Some name -> Format.fprintf ff "%s : " (Atom.hint name));
+    let sep = ref false in
+    if b && not pol then (Format.fprintf ff "no"; sep := true);
+    SSet.iter (fun x ->
+        if !sep then Format.fprintf ff " ";
+        Format.fprintf ff "%s" x;
+        sep := true
+      ) fv;
+  true
+  end
 
 and print_tyss st level pol ff qs =
   let l = TySSet.elements qs in
@@ -575,8 +601,8 @@ let prepare_printing l le =
       let name = get_eff_print_name !ec in
       incr ec;
       TyESet.iter (fun q ->
-        fv := TyEMap.add q (name ::
-                            try TyEMap.find q !fv with Not_found -> []) !fv
+        fv := TyEMap.add q (SSet.add name
+                            (try TyEMap.find q !fv with Not_found -> SSet.empty)) !fv
       ) (TyESet.union qs1 qs2)
     ) fvs;
     !fv

@@ -11,4 +11,6 @@ let box = fun f -> A f
 
 let _ = run (box f1)
 (* the following line should not typecheck *)
+(* let _ = box f2 *)
+(* let _ = A f2 *)
 (* let _ = run (box f2) *)

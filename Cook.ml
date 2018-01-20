@@ -21,118 +21,6 @@ let builtin_int_neg = T.ident false builtin_int_id
 
 let builtin_io_id = Atom.fresh "io"
 
-(*
-let head_merge polarity head1 head2 =
-  AHSet.union head1 head2
-
-let merge_st (polarity1, head1, nxt1) (polarity2, head2, nxt2) =
-  assert (polarity1 = polarity2);
-  (polarity1, head_merge polarity1 head1 head2,
-   ALMap.merge (fun _ t1 t2 ->
-       match t1, t2 with
-       | None, None -> None
-       | None, Some t | Some t, None -> Some t
-       | Some t1, Some t2 -> Some (ISet.union t1 t2)) nxt1 nxt2)
-
-let to_aut polarity ty =
-  let open T in
-  let aut = { data = Hashtbl.create 17 ; num_states = 0 } in
-  let eps = Hashtbl.create 17 in
-  let vs = Hashtbl.create 17 in
-  let add_eps q1 q2 =
-    Hashtbl.replace eps q1
-      (ISet.add q2 (try Hashtbl.find eps q1 with Not_found -> ISet.empty))
-  in
-  let new_state () =
-    let n = aut.num_states in
-    aut.num_states <- n + 1;
-    n
-  in
-  let rec walk polarity ty =
-    match Ty.head ty with
-    | Tident name ->
-      let n = new_state () in
-      let nxt = ALMap.empty in
-      Hashtbl.add aut.data n (polarity, AHSet.singleton (HIdent name), nxt);
-      n
-    | Tarrow (t1, _, t2) ->
-      let q1 = walk (not polarity) t1 in
-      let q2 = walk polarity t2 in
-      let n = new_state () in
-      let nxt = from_bindings [
-          LArrowsrc, (ISet.singleton q1);
-          LArrowdst, (ISet.singleton q2);
-        ] in
-      Hashtbl.add aut.data n (polarity, AHSet.singleton HArrow, nxt);
-      n
-    | Tbot ->
-      assert polarity;
-      let n = new_state () in
-      Hashtbl.add aut.data n (polarity, AHSet.empty, ALMap.empty);
-      n
-    | Ttop ->
-      assert (not polarity);
-      let n = new_state () in
-      Hashtbl.add aut.data n (polarity, AHSet.empty, ALMap.empty);
-      n
-    | Tjoin (t1, t2) ->
-      assert polarity;
-      let n = new_state () in
-      Hashtbl.add aut.data n (polarity, AHSet.empty, ALMap.empty);
-      add_eps n (walk polarity t1);
-      add_eps n (walk polarity t2);
-      n
-    | Tmeet (t1, t2) ->
-      assert (not polarity);
-      let n = new_state () in
-      Hashtbl.add aut.data n (polarity, AHSet.empty, ALMap.empty);
-      add_eps n (walk polarity t1);
-      add_eps n (walk polarity t2);
-      n
-    | Tproduct l ->
-      let l = List.map (walk polarity) l in
-      let n = new_state () in
-      let arity = List.length l in
-      let nxt = from_bindings (List.mapi
-        (fun i q -> (LTuple (arity, i), ISet.singleton q)) l) in
-      Hashtbl.add aut.data n (polarity, AHSet.singleton (HTuple arity), nxt);
-      n
-    | Trec (tv, t1) ->
-      let n = new_state () in
-      Hashtbl.add vs tv.id n;
-      Hashtbl.add aut.data n (polarity, AHSet.empty, ALMap.empty);
-      add_eps n (walk polarity t1);
-      n
-    | Tvar tv ->
-      try
-        let n = Hashtbl.find vs tv.id in
-        let (pol, _, _) = Hashtbl.find aut.data n in
-        assert (polarity = pol);
-        n
-      with Not_found ->
-        let n = new_state () in
-        Hashtbl.add aut.data n
-          (polarity, AHSet.singleton (HVar tv.id), ALMap.empty);
-        n
-  in
-  let root = walk polarity ty in
-  let seen = Hashtbl.create 17 in
-  let rec ewalk q =
-    if not (Hashtbl.mem seen q) then begin
-      Hashtbl.add seen q ();
-      let data = Hashtbl.find aut.data q in
-      let epn = try Hashtbl.find eps q with Not_found -> ISet.empty in
-      ISet.iter ewalk epn;
-      let data = ISet.fold (fun q2 data ->
-          merge_st data (Hashtbl.find aut.data q2)) epn data
-      in
-      Hashtbl.replace aut.data q data
-    end
-  in
-  Hashtbl.iter (fun q _ -> ewalk q) aut.data;
-  (root, aut)
-*)
-
 type scheme = {
   (* First place where the variable was used, for error reporting. *)
   hypotheses : (TyS.t * place) Atom.Map.t ;
@@ -232,9 +120,13 @@ let scheme_merge env q1 q2 =
   q1.constructors <- cmerge env q1.polarity q1.constructors q2.constructors
 
 exception BiUnificationFailure of TyC.t * TyC.t
+exception EffBiUnificationFailure of TyE.t * TyE.t
 
 let biunification_error t1 t2 =
   raise (BiUnificationFailure (t1, t2))
+
+let eff_biunification_error e1 e2 =
+  raise (EffBiUnificationFailure (e1, e2))
 
 let rec biunify_tys env t qp qm =
   if not (TySPSet.mem (qp, qm) !t) then begin
@@ -257,26 +149,6 @@ and biunify_tyss env t qps qms =
       biunify_tys env t qp qm
     ) qms
   ) qps
-
-(*
-and biunify_eff env t (effp, defp) (effm, defm) =
-  let efe = Atom.Map.merge (fun _ ep em ->
-      let ep = match ep with None -> defp | Some ep -> ep in
-      let em = match em with None -> defm | Some em -> em in
-        Some (biunify_ep env t ep em (fun () -> assert false (* TODO *)))
-    ) effp effm in biunify_ep env t defp defm (fun () -> assert false)
-
-and biunify_ep env t ep em err =
-  match ep, em with
-  | TyC.NotPresent, _ | _, TyC.Present -> ep, em
-  | TyC.Present, TyC.NotPresent -> err ()
-  | TyC.Pvar qps, TyC.Pvar qms ->
-    (* These should contain only effect variables: can use the standard tyss *)
-    biunify_tyss env t qps qms;
-    ep, em
-  | TyC.Present, _ -> TyC.Present, TyC.Present
-  | _, TyC.NotPresent -> TyC.NotPresent, TyC.NotPresent
-*)
 
 and merge_eff env name e1 e2 =
   let open TyE in
@@ -310,8 +182,11 @@ and biunify_eff_excl ex env t ep em =
   TyESet.iter (fun e -> merge_eff env None e ep) (fst emd);
   TyESet.iter (fun e -> merge_eff env None e em) (fst epd);
   assert (not (snd epd));
-  Atom.Map.iter (fun name (_, bp) -> let (_, bm) = Atom.Map.find name emf in
-                assert (not bm || not bp) (*todo nice error*)) epf
+  Atom.Map.iter (fun name (_, bp) ->
+      let (_, bm) = Atom.Map.find name emf in
+      if bm && bp then
+        eff_biunification_error ep em
+    ) epf
 
 and biunify_eff env = biunify_eff_excl Atom.Set.empty env
 
@@ -336,7 +211,12 @@ let biunify_eff_excl excl env = biunify_eff_excl excl env (ref TySPSet.empty)
 let biunify_eff env = biunify_eff env (ref TySPSet.empty)
 let biunify env = biunify_tys env (ref TySPSet.empty)
 
-let check_biunify_msg msg place env t1 t2 =
+let not_subtype_msg : _ format6 =
+  "The type %a is not a subtype of the type %a@."
+let not_subeffect_msg : _ format6 =
+  "The effect %a is not a compatible with the effect %a@."
+
+let check_biunify_msg (type a b) msg place env t1 t2 =
   if not !disable_type_checking then
     try biunify env t1 t2 with
     | BiUnificationFailure (ty1, ty2) ->
@@ -344,25 +224,29 @@ let check_biunify_msg msg place env t1 t2 =
           ([t1; t2] @
            TySSet.(elements (union (T.tyc_succ ty1) (T.tyc_succ ty2)))) []
       in
-      error place msg (T.print_tys st 0) t1 (T.print_tys st 0) t2
-        (T.print_tyc st 0 true) ty1 (T.print_tyc st 0 false) ty2
+      error place (msg ^^ "@.%t")
+        (T.print_tys st 0) t1 (T.print_tys st 0) t2
+        (fun ff -> Format.fprintf ff not_subtype_msg (T.print_tyc st 0 true) ty1 (T.print_tyc st 0 false) ty2)
+    | EffBiUnificationFailure (e1, e2) ->
+      let st = T.prepare_printing [t1; t2] [e1; e2] in
+      error place (msg ^^ "@.%t")
+        (T.print_tys st 0) t1 (T.print_tys st 0) t2
+        (fun ff -> Format.fprintf ff not_subeffect_msg (T.print_eff st 0 true) e1 (T.print_eff st 0 false) e2)
 
 let check_biunify =
-  check_biunify_msg "This expression has type %a but was expected of type %a\nThe type %a is not a subtype of the type %a"
+  check_biunify_msg "This expression has type %a but was expected of type %a@."
 
 let check_biunify_eff_excl_msg msg excl place env t1 t2 =
   if not !disable_type_checking then
     try biunify_eff_excl excl env t1 t2 with
-    | BiUnificationFailure (ty1, ty2) ->
-(*      let st = T.prepare_printing
-          ([t1; t2] @
-           TySSet.(elements (union (T.tyc_succ ty1) (T.tyc_succ ty2))))
-      in
-      error place msg (T.print_tys st 0) t1 (T.print_tys st 0) t2
-        (T.print_tyc st 0 true) ty1 (T.print_tyc st 0 false) ty2 *) assert false
+    | EffBiUnificationFailure (e1, e2) ->
+      let st = T.prepare_printing [] [t1; t2; e1; e2] in
+      error place (msg ^^ "@.%t")
+        (T.print_eff st 0 true) t1 (T.print_eff st 0 false) t2
+        (fun ff -> Format.fprintf ff not_subeffect_msg (T.print_eff st 0 true) e1 (T.print_eff st 0 false) e2)
 
 let check_biunify_eff_excl =
-  check_biunify_eff_excl_msg "This expression has type %a but was expected of type %a\nThe type %a is not a subtype of the type %a"
+  check_biunify_eff_excl_msg "This expression has effect %a but was expected to have effect %a"
 
 let check_biunify_eff = check_biunify_eff_excl Atom.Set.empty
 
@@ -478,20 +362,17 @@ let rec cook_term env { S.place ; S.value } =
     sc, T.BinOp (nt1, op, nt2)
   | S.Print t ->
     let sc, nt = cook_term env t in
-    let w1 = T.ident false builtin_int_id in
+    let w1 = T.ident true builtin_int_id in
+    let w2 = T.ident false builtin_int_id in
     let (ep, en) = TyE.create_flow_pair () in
     let e = TyE.create true in
     e.TyE.flows <- (Atom.Map.singleton builtin_io_id (TyESet.empty, true), (TyESet.empty, false));
-(*    check_biunify_eff t.S.place env
-      (Atom.Map.singleton builtin_io_id TyC.Present, TyC.NotPresent) en; *)
-    (* TODO *)
-    check_biunify t.S.place env sc.typ w1;
+    check_biunify t.S.place env sc.typ w2;
     check_biunify_eff t.S.place env sc.eff en;
     check_biunify_eff t.S.place env e en;
-    { sc with eff = ep }, T.Print nt
+    { sc with eff = ep ; typ = w1 }, T.Print nt
   | S.Let (recursive, x, t1, t2) ->
     let nenv, x, sc1, nt1 = cook_let env recursive x t1 in
-    (* Format.eprintf "val %s : @[<hv>%a@]@." (Atom.hint x) print_scheme sc1; *)
     let sc2, nt2 = cook_term nenv t2 in
     let (ep, en) = TyE.create_flow_pair () in
     check_biunify_eff t1.S.place env sc1.eff en;
@@ -604,7 +485,6 @@ let rec cook_term env { S.place ; S.value } =
       ) dv sc1.hypotheses in
       (nh, (np, nt1))
     ) l in
-    (*    ern.TyS.constructors <- TyCSet.singleton false (TyC.Teffect !matched_effects); *)
     Atom.Set.iter (fun name -> TyE.extend name ep) !matched_effects;
     Atom.Set.iter (fun name -> TyE.extend name ern) !matched_effects;
     check_biunify_eff_excl !matched_effects place env ep ern;
@@ -642,7 +522,7 @@ and cook_pattern_or_effect env ty rty ep = function
       | Some _, None ->
         error place "The effect constructor %s expects 0 arguments, but is applied here to 1 argument" c
     in
-    (* For now, assure this means the effect is matched (no exhausitivty checking). TODO: define correctly the type of kty *)
+    (* For now, assure this means the effect is matched (no exhausitivty checking). *)
     let kty = T.arrow true ty2n ep rty in
     let kv = Atom.fresh k in
       T.Effect (np, kv), (Smap.add k (kv, kty) dv), Atom.Set.singleton ename
@@ -671,7 +551,7 @@ and cook_pattern env mapped_vars ty { S.value ; S.place } =
     np, dv
   | S.PTuple l ->
     let ws = List.map (fun _ -> TyS.create_flow_pair ()) l in
-    check_biunify_msg "A pattern was expected which matches values of type %a but this pattern matches values of type %a\nThe type %a is not a subtype of the type %a" place env ty (T.product false (List.map snd ws));
+    check_biunify_msg "A pattern was expected which matches values of type %a but this pattern matches values of type %a" place env ty (T.product false (List.map snd ws));
     let nl = List.map2 (cook_pattern env mapped_vars) (List.map fst ws) l in
     let np = T.PTuple (List.map fst nl) in
     let dv = List.fold_left (fun dv (_, dvi) ->
@@ -692,7 +572,7 @@ and cook_pattern env mapped_vars ty { S.value ; S.place } =
     let tname, cargs, ctag, is_effect = Atom.Map.find catom env.constructor_defs in
     if is_effect then
       error place "This constructor is an effect constructor, not a value constructor";
-    check_biunify_msg "A pattern was expected which matches values of type %a but this pattern matches values of type %a\nThe type %a is not a subtype of the type %a" place env ty (T.ident false tname);
+    check_biunify_msg "A pattern was expected which matches values of type %a but this pattern matches values of type %a" place env ty (T.ident false tname);
     let n = List.length cargs in
     let args =
       match n, p with
@@ -725,7 +605,6 @@ and cook_let env recursive x t =
   | S.NonRecursive, t ->
     let sc, t = cook_term env t in
     let nenv, nx = add_gen x sc env in
-    (*    Format.eprintf "val %s : @[<hv>%a@]@." x print_scheme sc; *)
     (nenv, nx, copy_scheme sc, t)
   | S.Recursive, { S.value = S.Lam (y, t) ; _ } ->
     let sc, nx, ny, nt =
@@ -777,17 +656,23 @@ let rec cook_type env polarity { S.place ; S.value } =
       (List.map (cook_type env polarity) l)
 
 let rec cook_program env = function
-  | { S.value = S.DTerm t ; _ } :: p ->
+  | { S.value = S.DTerm t ; S.place } :: p ->
     let a = Atom.fresh "_" in
     let sc, nt = cook_term env t in
     assert (Atom.Map.is_empty sc.hypotheses);
-    (* unify_row row T.Rempty; (* TODO allow io *) *)
+    let e = TyE.create false in
+    e.TyE.flows <- (Atom.Map.singleton builtin_io_id (TyESet.empty, false),
+                (TyESet.empty, true));
+    check_biunify_eff place env sc.eff e;
     T.Let (a, nt, cook_program env p)
-  | { S.value = S.DLet (recursive, x, t) ; _ } :: p ->
+  | { S.value = S.DLet (recursive, x, t) ; S.place } :: p ->
     let env, nx, sc, nt = cook_let env recursive x t in
-    (* unify_row row T.Rempty; (* TODO allow io *) *)
     assert (Atom.Map.is_empty sc.hypotheses);
     Format.eprintf "val %s : @[<hv>%a@]@." x print_scheme sc;
+    let e = TyE.create false in
+    e.TyE.flows <- (Atom.Map.singleton builtin_io_id (TyESet.empty, false),
+                (TyESet.empty, true));
+    check_biunify_eff place env sc.eff e;
     T.Let (nx, nt, cook_program env p)
   | { S.value = S.DTypeSynonym (x, t) ; _ } :: p ->
     let n = Atom.fresh x in
