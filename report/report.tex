@@ -1,0 +1,54 @@
+\documentclass[a4paper,10pt]{article}
+
+\usepackage[francais]{babel}
+\usepackage[utf8]{inputenc}
+
+
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{stmaryrd}
+\usepackage{listings}
+\usepackage{url}
+\usepackage{graphicx}
+\usepackage{mathpartir}
+
+\usepackage{listings}
+\usepackage{xcolor}
+
+%\textwidth 173mm \textheight 235mm \topmargin -50pt \oddsidemargin
+%-0.45cm \evensidemargin -0.45cm
+
+%\newcommand{\code}[1]{{\fontfamily{pcr}\selectfont #1}}
+
+\title{Programmation fonctionnelle et système de types -- projet}
+\author{Nathanaël Courant}
+
+\begin{document}
+
+\maketitle
+
+\section{Règles de typage}
+
+Par simplicité, on suppose dans la suite que tous les constructeurs de types algébriques et d'effets sont d'arité exactement 1, quitte à remplacer le paramètre par un tuple (éventuellement vide). On suppose également que les pattern matching sont tous complets et ne sont pas profonds, par simplicité.
+
+\renewcommand{\DefTirName}{\LeftTirName}
+
+\begin{mathpar}
+  \inferrule[Var-$\Pi$]{\Pi(\hat{\mathbf{x}}) = [\Delta]t}{\Pi \Vdash \hat{\mathbf{x}} : [\Delta] t!\{\mathtt{E}_l : \bot\}_l} \and
+  \inferrule[Var-$\Delta$]{ }{\Pi \Vdash \mathrm{x} : [\mathrm{x} : \alpha] \alpha !\{\mathtt{E}_l : \bot\}_l} \and
+  \inferrule[Abs]{\Pi \Vdash e : [\Delta, \mathrm{x}:\tau] \tau'!\mathcal{E}}{\Pi \Vdash \lambda \mathrm{x}.e : [\Delta]\tau \xrightarrow{\mathcal{E}} \tau' !\{\mathtt{E}_l : \bot\}_l} \and
+  \inferrule[App]{\Pi \Vdash e_1 : [\Delta]\tau\xrightarrow{\mathcal{E}}\tau'!\mathcal{E} \\ \Pi\Vdash e_2 : [\Delta]\tau!\mathcal{E}}{\Pi\Vdash e_1 e_2 : [\Delta]\tau'!\mathcal{E}} \and
+  \inferrule[Let]{\Pi \Vdash e_1 : [\Delta_1]\tau_1!\mathcal{E} \\ \Pi,\hat{\mathbf{x}} : [\Delta_1]\tau_1 \Vdash e_2 : [\Delta_2]\tau_2!\mathcal{E}}{\Pi \Vdash \mathrm{let}~ \hat{\mathbf{x}} = e_1 ~\mathrm{in}~ e_2 : [\Delta_1 \sqcap \Delta_2]\tau_2!\mathcal{E}} \and
+  \inferrule[Nat]{ }{\Pi \Vdash n : []\mathrm{int}!\{\mathtt{E}_l : \bot\}_l} \\
+  \inferrule[IfZero]{\Pi \Vdash e_1 : [\Delta]\mathrm{int}!\mathcal{E} \\ \Pi\Vdash e_2 : [\Delta]\tau!\mathcal{E} \\ \Pi\Vdash e_3: [\Delta]\tau!\mathcal{E}}{\Pi\Vdash \mathrm{ifzero}~e_1~\mathrm{then}~e_2~\mathrm{else}~e_3 : [\Delta]\tau!\mathcal{E}} \and
+  \inferrule[Tuple]{\forall i \in \llbracket 1, n \rrbracket, \Pi \Vdash e_i : [\Delta]\tau_i!\mathcal{E}}{\Pi\Vdash (e_1, \dots, e_n) : [\Delta](\tau_1 * \dots * \tau_n) !\mathcal{E}} \and
+  \inferrule[MatchTuple]{\Pi\Vdash e : [\Delta](\tau_1 * \dots * \tau_n)!\mathcal{E} \\ \Pi\Vdash e' : [\Delta,x_1:\tau_1, \dots, x_n:\tau_n]\tau!\mathcal{E}}{\Pi\Vdash\mathrm{match}~e~\mathrm{with}~(x_1,\dots, x_n)\rightarrow e' : [\Delta]\tau!\mathcal{E}} \and
+  \inferrule[Constr]{\Pi\Vdash e : [\Delta]\tau'!\mathcal{E} \\ \vdash \mathtt{C} : \tau' \rightarrow \tau}{\Pi\Vdash \mathtt{C}~e : [\Delta]\tau!\mathcal{E}} \and
+  \inferrule[MatchConstr]{\Pi\Vdash e : [\Delta]\tau'!\mathcal{E} \\ \forall i \in \llbracket 1, n \rrbracket, \vdash \mathtt{C}_i : \tau_i \rightarrow \tau' \\ \forall i \in \llbracket 1, n \rrbracket, \Pi\Vdash e_i : [\Delta, x_i : \tau_i]\tau!\mathcal{E}}{\Pi\Vdash \mathrm{match}~e~\mathrm{with}~\mathtt{C}_1~x_1 \rightarrow e_1~| \dots |~\mathtt{C}_n~x_n  \rightarrow e_n : [\Delta]\tau!\mathcal{E}} \and
+  \inferrule[Effect]{\Pi\Vdash e : [\Delta]\tau'!\mathcal{E} \\ \vdash \mathtt{E}_l : \tau' \rightarrow \tau}{\Pi\Vdash \mathtt{E}_l~e : [\Delta]\tau!\{\mathtt{E}_l : \top, (\mathtt{E}_{l'} : \mathcal{E}_{l'})_{l' \neq l}\}} \and
+  \inferrule[MatchEffect]{\Pi\Vdash e : [\Delta]\tau'!\{(\mathtt{E}_{l_i} : \top)_{i \in \llbracket 1, n \rrbracket}, (\mathtt{E}_l : \mathcal{E}_l)_{l \notin \{l_1, \dots, l_n\}}\} \\ \Pi\Vdash e' : [\Delta, x : \tau']\tau!\mathcal{E} \\ \forall i \in \llbracket 1, n \rrbracket, \vdash \mathtt{E}_{l_i} : \tau_i \rightarrow \tau'_i \\ \forall i \in \llbracket 1, n \rrbracket, \Pi\Vdash e_i : [\Delta, x_i : \tau_i, k_i : \tau'_i \xrightarrow{\mathcal{E}} \tau]\tau!\mathcal{E}}{\Pi\Vdash \mathrm{match}~e~\mathrm{with}~x\rightarrow e'~|~\mathrm{effect}~\mathtt{E}_{l_1}~x_1~k_1\rightarrow e_1~|\dots|~\mathrm{effect}~\mathtt{E}_{l_n}~x_n~k_n\rightarrow e_n : [\Delta]\tau!\mathcal{E}} \and
+  \inferrule[Sub]{\Pi\Vdash e : [\Delta]\tau!\mathcal{E} \\ [\Delta]\tau!\mathcal{E} \leqslant^\forall [\Delta']\tau'!\mathcal{E'}}{\Pi\Vdash e : [\Delta']\tau'!\mathcal{E'}}
+\end{mathpar}
+
+\end{document}
