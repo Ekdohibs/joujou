@@ -144,13 +144,63 @@ and merge_all env polarity qs =
   TySSet.iter (scheme_merge env q) qs;
   q
 
+module PTySSetMap = Map.Make(struct
+    type t = bool * TySSet.t
+    let compare (p1, qs1) (p2, qs2) =
+      let u = compare p1 p2 in
+      if u = 0 then
+        TySSet.compare qs1 qs2
+      else
+        u
+  end)
+
+let rec simpl_tyss env st polarity qs =
+  try PTySSetMap.find (polarity, qs) !st
+  with Not_found ->
+    let q = merge_all env polarity qs in
+    let r = simpl_tys env st polarity q in
+    st := PTySSetMap.add (polarity, qs) r !st;
+    r
+
+and simpl_tys env st polarity q =
+  let q2 = TyS.create polarity in
+  TySSet.iter (TyS.add_flow_edge q2) q.TyS.flow;
+  q2.TyS.constructors <- List.map (simpl_tyc env st polarity) q.TyS.constructors;
+  q2
+
+and simpl_tyc env st polarity c =
+  let open TyC in
+  match c with
+  | Tarrow (qs1, e, qs2) ->
+    Tarrow (TySSet.singleton (simpl_tyss env st (not polarity) qs1),
+            e,
+            TySSet.singleton (simpl_tyss env st polarity qs2))
+  | Tproduct qsl ->
+    Tproduct (List.map (fun qs ->
+        TySSet.singleton (simpl_tyss env st polarity qs)) qsl)
+  | Tident (vs, n) -> Tident (List.map (simpl_var env st polarity) vs, n)
+
+and simpl_var env st polarity v =
+  let open TyC in
+  match v with
+  | VNone -> VNone
+  | VPos qs -> VPos (TySSet.singleton (simpl_tyss env st polarity qs))
+  | VNeg qs -> VNeg (TySSet.singleton (simpl_tyss env st (not polarity) qs))
+  | VPosNeg (qps, qns) ->
+    VPosNeg (TySSet.singleton (simpl_tyss env st polarity qps),
+             TySSet.singleton (simpl_tyss env st (not polarity) qns))
+
+
 let print_scheme env ff { hypotheses ; typ ; eff } =
-  let l = typ :: (List.map (fun (_, (st, _)) -> st)
-                    (Atom.Map.bindings hypotheses)) in
+  let st = ref PTySSetMap.empty in
+  let typ = simpl_tys env st true typ in
+  let hypotheses = Atom.Map.map
+      (fun (q, _) -> simpl_tys env st false q) hypotheses in
+  let l = typ :: (List.map snd (Atom.Map.bindings hypotheses)) in
   let st = T.prepare_printing l [eff] in
   if not (Atom.Map.is_empty hypotheses) then begin
     Format.fprintf ff "[@[<hov 2>";
-    List.iteri (fun i (a, (ty, _)) ->
+    List.iteri (fun i (a, ty) ->
         if i > 0 then Format.fprintf ff ",@ ";
         Format.fprintf ff "%s : %a" (Atom.hint a) (T.print_tys st 0) ty
     ) (Atom.Map.bindings hypotheses);
