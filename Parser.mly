@@ -3,7 +3,7 @@
 %token<int> INTLITERAL
 %token FUN IN LET PRINT REC
 %token IFZERO THEN ELSE
-%token ARROW EQ LPAREN RPAREN BAR COMMA STAR SEMISEMI COLON
+%token ARROW EQ LPAREN RPAREN BAR COMMA STAR SEMISEMI COLON QUOTE
 %token TYPE OF EFFECT
 %token MATCH WITH
 %token<RawLambda.binop> MULOP ADDOP
@@ -63,12 +63,17 @@ program_tail:
 %inline decl:
 | d = placed(decl_) { d }
 
+type_decl_id:
+| x = IDENT { [], x }
+| QUOTE i = IDENT x = IDENT { [i], x }
+| LPAREN l = separated_nonempty_list(COMMA, preceded(QUOTE, IDENT)) RPAREN x = IDENT { l, x }
+
 decl_:
 | LET mode = recursive x = IDENT EQ t = any_term
     { DLet (mode, x, t) }
-| TYPE x = IDENT EQ l = left_flexible_list(BAR, placed(type_decl_case_))
+| TYPE x = type_decl_id EQ l = left_flexible_list(BAR, placed(type_decl_case_))
     { DNewType (x, l) }
-| TYPE x = IDENT EQ t = ty
+| TYPE x = type_decl_id EQ t = ty
     { DTypeSynonym (x, t) }
 (*
 | EFFECT x = IDENT EQ l = left_flexible_list(BAR, placed(effect_decl_case_))
@@ -104,7 +109,11 @@ ty_:
 
 simple_type_:
 | LPAREN t = ty_ RPAREN { t }
-| x = IDENT { TVar x }
+| x = IDENT { TConstructor ([], x) }
+| QUOTE x = IDENT { TVariable x }
+| t = simple_type x = IDENT { TConstructor ([t], x) }
+| LPAREN t1 = ty COMMA l = separated_nonempty_list(COMMA, ty) RPAREN x = IDENT
+  { TConstructor (t1 :: l, x) }
 
 atomic_term_:
 | LPAREN t = any_term_ RPAREN

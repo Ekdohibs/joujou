@@ -100,6 +100,8 @@ and token = parse
     { SEMISEMI }
 | ":"
     { COLON }
+| "'"
+    { QUOTE }
 | (lowercase identchar *) as x
     { try Hashtbl.find keywords x with Not_found -> IDENT x }
 | (uppercase identchar *) as x

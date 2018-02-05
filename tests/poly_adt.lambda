@@ -1,0 +1,28 @@
+type 'a list = Nil | Cons of 'a * 'a list
+
+let rec fold_left = fun f -> fun a -> fun l ->
+  match l with
+  | Nil -> a
+  | Cons (x, l) -> fold_left f (f a x) l
+
+let iter = fun f -> fold_left (fun a -> fun b -> f b) 0
+let rev = fold_left (fun a -> fun b -> Cons (b, a)) Nil
+let rev_map = fun f -> fold_left (fun a -> fun b -> Cons (f b, a)) Nil
+let map = fun f -> fun l -> rev (rev_map f l)
+let print_list = iter (fun x -> print x)
+
+let fst = fun x -> match x with (a, b) -> a
+let snd = fun x -> match x with (a, b) -> b
+
+let l = Cons ((17, 42), Cons ((12, 33), Nil))
+let _ = print_list (map fst l)
+let _ = print_list (map snd l)
+
+type 'a t = (int -> 'a -> int) list
+type 'a box = A of 'a t
+
+let tst = fun b -> match b with
+  | A l -> map (fun x -> x 1) l
+
+let l2 = Cons ((fun x -> fun y -> x + y + 39), Cons ((fun x -> fun y -> x * y + 5), Nil))
+let _ = print_list (map (fun x -> x 2) (tst (A l2)))

@@ -58,18 +58,22 @@ and pattern_or_effect =
   | Effect of constructor placed * pattern option * variable
 
 and ty_ =
-  | TVar of variable
+  | TConstructor of ty list * variable
+  | TVariable of variable
   | TTuple of ty list
   | TArrow of ty * ty
 
 and ty =
   ty_ placed
 
+and ty_decl_id =
+  variable list * variable
+
 and decl_ =
   | DLet of recursive * variable * term
-  | DNewType of variable * (constructor * ty list) placed list
+  | DNewType of ty_decl_id * (constructor * ty list) placed list
   | DEffect of variable * (constructor * ty option * ty) placed
-  | DTypeSynonym of variable * ty
+  | DTypeSynonym of ty_decl_id * ty
   | DTerm of term
 
 and decl =

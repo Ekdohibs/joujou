@@ -68,8 +68,7 @@ and pattern_or_effect =
 [@@deriving show { with_path = false }]
 
 module rec TyE : sig
-  type ep =
-    (*    | NotPresent | Present | Pvar of TyESet.t *) TyESet.t * bool
+  type ep = TyESet.t * bool
   type t = {
     id : int ;
     polarity : bool ;
@@ -83,8 +82,7 @@ module rec TyE : sig
   val add_flow_edge : Atom.atom option -> t -> t -> unit
   val merge : bool -> t -> t -> t
 end = struct
-  type ep =
-    (* | NotPresent | Present | Pvar of TyESet.t *) TyESet.t * bool
+  type ep = TyESet.t * bool
   type t = {
     id : int ;
     polarity : bool ;
@@ -171,46 +169,25 @@ end
 and TyESet : Set.S with type elt = TyE.t = Set.Make(TyE)
 
 module rec TyC : sig
-  type effectpresence =
-    | NotPresent | Present | Pvar of TySSet.t
-  type eff = effectpresence Atom.Map.t * effectpresence
   type t =
-    | Tident of tname
+    | Tident of variance list * tname
     | Tarrow of TySSet.t * TyE.t * TySSet.t
     | Tproduct of TySSet.t list
-  val merge_effect_presence : bool -> effectpresence -> effectpresence -> effectpresence
-  val ep_eq : effectpresence -> effectpresence -> bool
-  val merge_eff : bool -> eff -> eff -> eff
+  and variance =
+    | VNone
+    | VPos of TySSet.t
+    | VNeg of TySSet.t
+    | VPosNeg of TySSet.t * TySSet.t
 end = struct
-  type effectpresence =
-    | NotPresent | Present | Pvar of TySSet.t
-  type eff = effectpresence Atom.Map.t * effectpresence
   type t =
-    | Tident of tname
+    | Tident of variance list * tname
     | Tarrow of TySSet.t * TyE.t * TySSet.t
     | Tproduct of TySSet.t list
-  let merge_effect_presence pol ep1 ep2 =
-    if pol then (* union *)
-      match ep1, ep2 with
-      | NotPresent, ep | ep, NotPresent -> ep
-      | Present, _ | _, Present -> Present
-      | Pvar qs1, Pvar qs2 -> Pvar (TySSet.union qs1 qs2)
-    else (* intersection *)
-      match ep1, ep2 with
-      | NotPresent, _ | _, NotPresent -> NotPresent
-      | Present, ep | ep, Present -> ep
-      | Pvar qs1, Pvar qs2 -> Pvar (TySSet.union qs1 qs2)
-  let ep_eq ep1 ep2 =
-    match ep1, ep2 with
-    | Present, Present | NotPresent, NotPresent -> true
-    | Pvar qs1, Pvar qs2 -> TySSet.equal qs1 qs2
-    | _, _ -> false
-  let merge_eff pol (ef1, ed1) (ef2, ed2) =
-    Atom.Map.merge (fun _ e1 e2 ->
-        let e1 = match e1 with None -> ed1 | Some e1 -> e1 in
-        let e2 = match e2 with None -> ed2 | Some e2 -> e2 in
-        Some (merge_effect_presence pol e1 e2)
-      ) ef1 ef2, merge_effect_presence pol ed1 ed2
+  and variance =
+    | VNone
+    | VPos of TySSet.t
+    | VNeg of TySSet.t
+    | VPosNeg of TySSet.t * TySSet.t
 end
 
 and TyCSet : sig
@@ -223,11 +200,26 @@ and TyCSet : sig
   val need_resolve : bool -> bool -> t -> t -> bool
 end = struct
   type t = TyC.t list
+  let merge_variance v1 v2 =
+    let open TyC in
+    match v1, v2 with
+    | VNone, v | v, VNone -> v
+    | VPos qs1, VPos qs2 -> VPos (TySSet.union qs1 qs2)
+    | VNeg qs1, VNeg qs2 -> VNeg (TySSet.union qs1 qs2)
+    | VPos qps1, VPosNeg (qps2, qns2) | VPosNeg (qps2, qns2), VPos qps1 ->
+      VPosNeg (TySSet.union qps1 qps2, qns2)
+    | VNeg qns1, VPosNeg (qps2, qns2) | VPosNeg (qps2, qns2), VNeg qns1 ->
+      VPosNeg (qps2, TySSet.union qns1 qns2)
+    | VPosNeg (qps1, qns1), VPosNeg (qps2, qns2) ->
+      VPosNeg (TySSet.union qps1 qps2, TySSet.union qns1 qns2)
+    | VPos qps, VNeg qns | VNeg qns, VPos qps -> VPosNeg (qps, qns)
   let rec add pol x l =
     let open TyC in
     match x, l with
     | _, [] -> [x]
-    | Tident n1, Tident n2 :: l1 when Atom.equal n1 n2 -> l
+    | Tident (vs1, n1), Tident (vs2, n2) :: l1 when Atom.equal n1 n2 ->
+      assert (List.length vs1 = List.length vs2);
+      Tident (List.map2 merge_variance vs1 vs2, n1) :: l1
     | Tarrow (qsa1, qsb1, qsc1), Tarrow (qsa2, qsb2, qsc2) :: l1 ->
       Tarrow (TySSet.union qsa1 qsa2, TyE.merge pol qsb1 qsb2,
               TySSet.union qsc1 qsc2) :: l1
@@ -255,7 +247,7 @@ end = struct
     let open TyC in
     match l1, l2 with
     | [], _ | _, [] -> false
-    | [Tident n1], [Tident n2] when Atom.equal n1 n2 -> false
+    | [Tident (_, n1)], [Tident (_, n2)] when Atom.equal n1 n2 -> false
     | _ -> true
 end
 
@@ -269,7 +261,6 @@ and TyS : sig
   val compare : t -> t -> int
   val create : bool -> t
   val create_flow_pair : unit -> t * t
-  (* val create_effect_pair : unit -> TyC.eff * TyC.eff *)
   val add_flow_edge : t -> t -> unit
 end = struct
   type t = {
@@ -290,10 +281,6 @@ end = struct
     q1.flow <- TySSet.singleton q2;
     q2.flow <- TySSet.singleton q1;
     (q1, q2)
-  let create_effect_pair () =
-    let (qp, qn) = create_flow_pair () in
-    (Atom.Map.empty, TyC.Pvar (TySSet.singleton qp)),
-    (Atom.Map.empty, TyC.Pvar (TySSet.singleton qn))
   let add_flow_edge q1 q2 =
     q1.flow <- TySSet.add q2 q1.flow;
     q2.flow <- TySSet.add q1 q2.flow
@@ -328,28 +315,20 @@ let product polarity l =
   w.TyS.constructors <- TyCSet.singleton polarity (TyC.Tproduct qsl);
   w
 
-let ident polarity n =
+let ident polarity n vs =
   let w = TyS.create polarity in
-  w.TyS.constructors <- TyCSet.singleton polarity (TyC.Tident n);
+  w.TyS.constructors <- TyCSet.singleton polarity (TyC.Tident (vs, n));
   w
-(*
-let effect polarity eff def =
-  let w = TyS.create polarity in
-  assert (def <> TyC.Present);
-  w.TyS.constructors <- TyCSet.singleton polarity
-      (TyC.Teffect (eff, def));
-  w
-*)
-let tep_succ = function
-  | TyC.Present | TyC.NotPresent -> TySSet.empty
-  | TyC.Pvar qs -> qs
 
-let teff_succ (eff, def) =
-  Atom.Map.fold (fun _ ep qs -> TySSet.union qs (tep_succ ep)) eff (tep_succ def)
+let var_succ = function
+  | TyC.VNone -> TySSet.empty
+  | TyC.VPos qs | TyC.VNeg qs -> qs
+  | TyC.VPosNeg (qps, qns) -> TySSet.union qps qns
 
 let tyc_succ = function
-  | TyC.Tident _ -> TySSet.empty
-  | TyC.Tarrow (q1, eff, q2) -> (* TySSet.union q1 (TySSet.union q2 (teff_succ eff)) *) TySSet.union q1 q2
+  | TyC.Tident (vs, _) ->
+    List.fold_left TySSet.union TySSet.empty (List.map var_succ vs)
+  | TyC.Tarrow (q1, eff, q2) -> TySSet.union q1 q2
   | TyC.Tproduct l -> List.fold_left TySSet.union TySSet.empty l
 
 let tys_succ q =
@@ -445,23 +424,42 @@ let decompose_flow_e name elms =
 
 module SSet = Set.Make(String)
 
+let pfprintf (level : int) lprotect rprotect ff fmt =
+  if level >= lprotect then Format.fprintf ff "(";
+  Format.kfprintf (fun ff -> if level >= rprotect then Format.fprintf ff ")")
+    ff fmt
+
 let rec print_tyc st level pol ff t =
   match t with
-  | TyC.Tident n -> Format.fprintf ff "%s" (Atom.hint n)
+  | TyC.Tident ([], n) ->
+    Format.fprintf ff "%s" (Atom.hint n)
+  | TyC.Tident (vs, n) ->
+    Format.fprintf ff "%t %s" (fun ff ->
+        List.iteri (fun i va ->
+            if i > 0 then Format.fprintf ff ", ";
+            print_var st 10 pol ff va) vs
+    ) (Atom.hint n)
   | TyC.Tarrow (qs1, eff, qs2) ->
-    if level >= 3 then Format.fprintf ff "(";
-    Format.fprintf ff "%a -[@[<hv>%a@]]->@ @[<hv>%a@]"
+    pfprintf level 3 3 ff "%a -[@[<hv>%a@]]->@ @[<hv>%a@]"
       (print_tyss st 3 (not pol)) qs1
       (print_eff st 0 pol) eff
-      (print_tyss st 2 pol) qs2;
-    if level >= 3 then Format.fprintf ff ")"
+      (print_tyss st 2 pol) qs2
   | TyC.Tproduct l ->
-    if level >= 4 then Format.fprintf ff "(";
-    List.iteri (fun i qs ->
+    pfprintf level 4 4 ff "%t" (fun ff ->
+      List.iteri (fun i qs ->
         if i > 0 then Format.fprintf ff " *@ ";
         Format.fprintf ff "%a" (print_tyss st 4 pol) qs
-    ) l;
-    if level >= 4 then Format.fprintf ff ")"
+      ) l
+    )
+
+and print_var st level pol ff va =
+  match va with
+  | TyC.VNone -> Format.fprintf ff "_"
+  | TyC.VPos qs -> Format.fprintf ff "+%a" (print_tyss st 10 pol) qs
+  | TyC.VNeg qs -> Format.fprintf ff "-%a" (print_tyss st 10 (not pol)) qs
+  | TyC.VPosNeg (qsp, qsn) ->
+    Format.fprintf ff "[+%a -%a]"
+      (print_tyss st 10 pol) qsp (print_tyss st 10 (not pol)) qsn
 
 and print_eff st level pol ff t =
   let eff, def = t.TyE.flows in
@@ -511,12 +509,11 @@ and print_tyss st level pol ff qs =
   | [q] -> print_tys st level ff q
   | _ ->
     let lv, op = if pol then 5, "|" else 7, "&" in
-    if level >= lv then Format.fprintf ff "(";
-    List.iteri (fun i q ->
+    pfprintf level lv lv ff "%t" (fun ff ->
+      List.iteri (fun i q ->
         if i > 0 then Format.fprintf ff " %s@ " op;
         Format.fprintf ff "%a" (print_tys st (lv + 1)) q
-    ) l;
-    if level >= lv then Format.fprintf ff ")"
+      ) l)
 
 and print_tys st level ff q =
   let (flow_vars, rec_vars, rec_seen, _) = st in
@@ -645,19 +642,20 @@ let prepare_copy l le =
   let m = TySSet.fold (fun q m -> TySMap.add q (TyS.create q.TyS.polarity) m)
       acc TySMap.empty in
   let tyss_copy = TySSet.map (fun q2 -> TySMap.find q2 m) in
-(*  let ep_copy = function
-    | TyC.Present -> TyC.Present
-    | TyC.NotPresent -> TyC.NotPresent
-    | TyC.Pvar qs -> TyC.Pvar (tyss_copy qs)
-    in *)
   let effs_copy = TyESet.map (fun e -> TyEMap.find e em) in
   let em_copy (s, b) = (effs_copy (TyESet.inter s eacc), b) in
   let fl_copy (eff, def) = (Atom.Map.map em_copy eff, em_copy def) in
   TyEMap.iter (fun e ne ->
       ne.TyE.flows <- fl_copy e.TyE.flows) em;
   let eff_copy eff = TyEMap.find eff em in
+  let var_copy = function
+    | TyC.VNone -> TyC.VNone
+    | TyC.VPos qs -> TyC.VPos (tyss_copy qs)
+    | TyC.VNeg qs -> TyC.VNeg (tyss_copy qs)
+    | TyC.VPosNeg (qps, qns) -> TyC.VPosNeg (tyss_copy qps, tyss_copy qns)
+  in
   let tyc_copy = function
-    | TyC.Tident n -> TyC.Tident n
+    | TyC.Tident (vs, n) -> TyC.Tident (List.map var_copy vs, n)
     | TyC.Tarrow (qs1, eff, qs2) ->
       TyC.Tarrow (tyss_copy qs1, eff_copy eff, tyss_copy qs2)
     | TyC.Tproduct l -> TyC.Tproduct (List.map tyss_copy l)
@@ -672,15 +670,6 @@ let copy st q =
   TySMap.find q (fst st)
 
 let tyss_copy st = TySSet.map (copy st)
-(*
-let ep_copy st = function
-  | TyC.Present -> TyC.Present
-  | TyC.NotPresent -> TyC.NotPresent
-  | TyC.Pvar qs -> TyC.Pvar (tyss_copy st qs)
-
-let eff_copy st (eff, def) =
-  (Atom.Map.map (ep_copy st) eff, ep_copy st def)
-*)
 
 let eff_copy st e = TyEMap.find e (snd st)
 
