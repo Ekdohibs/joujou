@@ -333,7 +333,7 @@ let not_subtype_msg : _ format6 =
 let not_subeffect_msg : _ format6 =
   "The effect %a is not a compatible with the effect %a@."
 
-let check_biunify_msg (type a b) msg place env t1 t2 =
+let check_biunify_msg msg place env t1 t2 =
   if not !disable_type_checking then
     try biunify env t1 t2 with
     | BiUnificationFailure (ty1, ty2) ->
