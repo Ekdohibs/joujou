@@ -50,6 +50,7 @@ let run_all = fun f ->
 
 let _ = print_list (run_all f)
 
+(* Check effect arguments *)
 type ('a, !p, 'b) func = In of ('a -[!p]-> 'b)
 
 let box_map = In map
@@ -65,7 +66,12 @@ let fio_apply_zero = InIO (fun f -> f 0)
 let unbox_io_ap = fun f -> fun x -> match f with InIO f -> f x
 
 type ('a, 'b) only_io_func = IO of ('a -[io]-> 'b)
+
 let io_print_list = IO print_list
 let io_apply_zero = IO (fun f -> f 0)
 (* should not typecheck *)
 (* let io_choose = IO (choose 0) *)
+
+let rebox_io = fun f -> match f with InIO f -> IO f
+let rebox_in = fun f -> match f with InIO f -> In f
+let rebox_io_in = fun f -> match f with IO f -> In f
