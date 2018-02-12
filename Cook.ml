@@ -29,7 +29,7 @@ type binding =
   | BScheme of scheme
   | BInfer
 
-type inst = TyS.t Atom.Map.t -> TyS.t
+type inst = (TyS.t Atom.Map.t * TyE.t Atom.Map.t) -> TyS.t
 
 type typedef =
   | TBaseType of Atom.atom
@@ -47,7 +47,7 @@ type env = {
   (*  fvars : TVSet.t ; *)
   type_bindings : Atom.atom Smap.t ;
   type_variables : (Atom.atom * Atom.atom) Smap.t ;
-  type_variance : tavar list Atom.Map.t ;
+  type_variance : (tavar * bool) list Atom.Map.t ;
   type_defs : typedef Atom.Map.t ;
   constructor_bindings : Atom.atom Smap.t ;
   constructor_defs :
@@ -65,47 +65,55 @@ let base_env = {
   type_defs = Atom.Map.singleton builtin_int_id (TBaseType builtin_int_id) ;
   constructor_bindings = Smap.empty ;
   constructor_defs = Atom.Map.empty ;
-  effect_bindings = Smap.empty ;
+  effect_bindings = Smap.singleton "io" builtin_io_id ;
   effect_defs = Atom.Map.empty ;
   free_effect_tag = 0 ;
 }
 
 let rec do_instanciate env polarity t vs vas =
   assert (List.length vas = List.length vs);
-  let am = List.fold_left2 (fun am v va ->
+  let add_to_map create build am v va =
     match va with
     | ANone -> assert (v = TyC.VNone); am
     | APos xp ->
       let qp = match v with
-        | TyC.VNone -> TyS.create polarity
-        | TyC.VPos qps -> merge_all env polarity qps
+        | TyC.VNone -> create polarity
+        | TyC.VPos qps -> build polarity qps
         | _ -> assert false
       in
-      assert (qp.TyS.polarity = polarity);
       Atom.Map.add xp qp am
     | ANeg xn ->
       let qn = match v with
-        | TyC.VNone -> TyS.create (not polarity)
-        | TyC.VNeg qns -> merge_all env (not polarity) qns
+        | TyC.VNone -> create (not polarity)
+        | TyC.VNeg qns -> build (not polarity) qns
         | _ -> assert false
       in
-      assert (qn.TyS.polarity = not polarity);
       Atom.Map.add xn qn am
     | APosNeg (xp, xn) ->
       assert (not (Atom.equal xp xn));
       let qp, qn = match v with
-        | TyC.VNone -> TyS.create polarity, TyS.create (not polarity)
-        | TyC.VPos qps -> merge_all env polarity qps, TyS.create (not polarity)
-        | TyC.VNeg qns -> TyS.create polarity, merge_all env (not polarity) qns
+        | TyC.VNone -> create polarity, create (not polarity)
+        | TyC.VPos qps -> build polarity qps, create (not polarity)
+        | TyC.VNeg qns -> create polarity, build (not polarity) qns
         | TyC.VPosNeg (qps, qns) ->
-          merge_all env polarity qps, merge_all env (not polarity) qns
+          build polarity qps, build (not polarity) qns
       in
-      assert (qp.TyS.polarity = polarity);
-      assert (qn.TyS.polarity = not polarity);
       Atom.Map.add xn qn (Atom.Map.add xp qp am)
-  ) Atom.Map.empty vs vas
   in
-  t am
+  let ve, vt = List.partition (fun (v, (_, b)) ->
+      match v with
+      | TyC.AEff _ -> assert b; b
+      | TyC.AType _ -> assert (not b); b
+  ) (List.combine vs vas) in
+  let vts, vtas = List.split
+      (List.map (fun (v, (va, _)) ->
+           match v with TyC.AType v -> (v, va) | _ -> assert false) vt) in
+  let ves, veas = List.split
+      (List.map (fun (v, (va, _)) ->
+           match v with TyC.AEff v -> (v, va) | _ -> assert false) ve) in
+  let amt = List.fold_left2 (add_to_map TyS.create (merge_all env)) Atom.Map.empty vts vtas in
+  let ame = List.fold_left2 (add_to_map TyE.create (fun _ x -> x)) Atom.Map.empty ves veas in
+  t (amt, ame)
 
 and resolve env polarity t =
   match t with
@@ -178,7 +186,7 @@ and simpl_tyc env st polarity c =
   | Tproduct qsl ->
     Tproduct (List.map (fun qs ->
         TySSet.singleton (simpl_tyss env st polarity qs)) qsl)
-  | Tident (vs, n) -> Tident (List.map (simpl_var env st polarity) vs, n)
+  | Tident (vs, n) -> Tident (List.map (simpl_arg env st polarity) vs, n)
 
 and simpl_var env st polarity v =
   let open TyC in
@@ -190,6 +198,11 @@ and simpl_var env st polarity v =
     VPosNeg (TySSet.singleton (simpl_tyss env st polarity qps),
              TySSet.singleton (simpl_tyss env st (not polarity) qns))
 
+and simpl_arg env st polarity a =
+  let open TyC in
+  match a with
+  | AEff v -> AEff v
+  | AType v -> AType (simpl_var env st polarity v)
 
 let print_scheme env ff { hypotheses ; typ ; eff } =
   let st = ref PTySSetMap.empty in
@@ -230,6 +243,18 @@ let biunification_error t1 t2 =
 
 let eff_biunification_error e1 e2 =
   raise (EffBiUnificationFailure (e1, e2))
+
+let biunify_vs bu env t vp vm =
+  let open TyC in
+  match vp, vm with
+  | VNone, _ | _, VNone | VPos _, VNeg _ | VNeg _, VPos _ -> ()
+  | VPos qp, VPos qm | VPos qp, VPosNeg (qm, _) | VPosNeg (qp, _), VPos qm ->
+    bu env t qp qm
+  | VNeg qp, VNeg qm | VNeg qp, VPosNeg (_, qm) | VPosNeg (_, qp), VNeg qm ->
+    bu env t qm qp
+  | VPosNeg (qp1, qp2), VPosNeg (qm1, qm2) ->
+    bu env t qp1 qm1;
+    bu env t qm2 qp2
 
 let rec biunify_tys env t qp qm =
   if not (TySPSet.mem (qp, qm) !t) then begin
@@ -300,7 +325,7 @@ and biunify_tyc env t tp tm =
     if not (Atom.equal n1 n2) then
       biunification_error tp tm;
     assert (List.length vs1 = List.length vs2);
-    List.iter2 (biunify_vs env t) vs1 vs2
+    List.iter2 (biunify_args env t) vs1 vs2
   | Tarrow (tpa, effp, tpb), Tarrow (tma, effm, tmb) ->
     biunify_tyss env t tma tpa;
     biunify_tyss env t tpb tmb;
@@ -312,17 +337,12 @@ and biunify_tyc env t tp tm =
       biunification_error tp tm
   | _, _ -> biunification_error tp tm
 
-and biunify_vs env t vp vm =
+and biunify_args env t ap am =
   let open TyC in
-  match vp, vm with
-  | VNone, _ | _, VNone | VPos _, VNeg _ | VNeg _, VPos _ -> ()
-  | VPos qp, VPos qm | VPos qp, VPosNeg (qm, _) | VPosNeg (qp, _), VPos qm ->
-    biunify_tyss env t qp qm
-  | VNeg qp, VNeg qm | VNeg qp, VPosNeg (_, qm) | VPosNeg (_, qp), VNeg qm ->
-    biunify_tyss env t qm qp
-  | VPosNeg (qp1, qp2), VPosNeg (qm1, qm2) ->
-    biunify_tyss env t qp1 qm1;
-    biunify_tyss env t qm2 qp2
+  match ap, am with
+  | AType vp, AType vm -> biunify_vs biunify_tyss env t vp vm
+  | AEff vp, AEff vm -> biunify_vs biunify_eff env t vp vm
+  | _ -> assert false
 
 let biunify_eff_excl excl env = biunify_eff_excl excl env (ref TySPSet.empty)
 let biunify_eff env = biunify_eff env (ref TySPSet.empty)
@@ -412,22 +432,30 @@ let find place id env =
 let unify_hyp_many env l =
   List.fold_left (unify_hyp env) Atom.Map.empty l
 
-let create_var_pair = function
+let create_var_pair mk build = function
   | ANone -> TyC.VNone, TyC.VNone
   | APos _ ->
-    let qp, qn = TyS.create_flow_pair () in
-    TyC.VPos (TySSet.singleton qp), TyC.VPos (TySSet.singleton qn)
+    let qp, qn = mk () in
+    TyC.VPos (build qp), TyC.VPos (build qn)
   | ANeg _ ->
-    let qp, qn = TyS.create_flow_pair () in
-    TyC.VNeg (TySSet.singleton qn), TyC.VNeg (TySSet.singleton qp)
+    let qp, qn = mk () in
+    TyC.VNeg (build qn), TyC.VNeg (build qp)
   | APosNeg _ ->
-    let qp1, qn1 = TyS.create_flow_pair () in
-    let qp2, qn2 = TyS.create_flow_pair () in
-    TyC.VPosNeg (TySSet.singleton qp1, TySSet.singleton qn2),
-    TyC.VPosNeg (TySSet.singleton qn1, TySSet.singleton qp2)
+    let qp1, qn1 = mk () in
+    let qp2, qn2 = mk () in
+    TyC.VPosNeg (build qp1, build qn2),
+    TyC.VPosNeg (build qn1, build qp2)
+
+let create_arg_pair (v, is_effect) =
+  if is_effect then
+    let a, b = create_var_pair TyE.create_flow_pair (fun x -> x) v in
+    TyC.AEff a, TyC.AEff b
+  else
+    let a, b = create_var_pair TyS.create_flow_pair TySSet.singleton v in
+    TyC.AType a, TyC.AType b
 
 let create_var_pairs l =
-  List.split (List.map create_var_pair l)
+  List.split (List.map create_arg_pair l)
 
 let rec cook_term env { S.place ; S.value } =
   match value with
@@ -785,53 +813,110 @@ and cook_let env recursive x t =
     error place
       "the right-hand side of 'let rec' must be a lambda-abstraction"
 
+let cook_var cook build polarity va t =
+  match va with
+  | ANone -> fun inst -> TyC.VNone
+  | APos _ ->
+    let t = cook polarity t in
+    fun inst -> TyC.VPos (build (t inst))
+  | ANeg _ ->
+    let t = cook (not polarity) t in
+    fun inst -> TyC.VNeg (build (t inst))
+  | APosNeg _ ->
+    let tp = cook polarity t in
+    let tn = cook (not polarity) t in
+    fun inst -> TyC.VPosNeg (build (tp inst), build (tn inst))
+
 let rec cook_type env polarity { S.place ; S.value } =
   match value with
   | S.TVariable x ->
     let np, nn =
       try
-        Smap.find x env.type_variables
+        Smap.find ("'" ^ x) env.type_variables
       with Not_found -> error place "Unbound type variable: '%s" x
     in
     let n = if polarity then np else nn in
-    fun inst ->
-      let q = Atom.Map.find n inst in
+    fun (tinst, _) ->
+      let q = Atom.Map.find n tinst in
       assert (q.TyS.polarity = polarity);
       q
   | S.TConstructor (l, x) -> begin
     match Smap.find x env.type_bindings with
     | n ->
-      let va = Atom.Map.find n env.type_variance in
-      if List.length va <> List.length l then
-        error place "The type constructor %s expects %d arguments but was given %d arguments" x (List.length va) (List.length l);
-      let nl = List.map2 (cook_var env polarity) va l in
+      let vas = Atom.Map.find n env.type_variance in
+      if List.length vas <> List.length l then
+        error place "The type constructor %s expects %d arguments but was given %d arguments" x (List.length vas) (List.length l);
+      let nl = List.map2 (cook_arg env polarity) vas l in
       fun inst ->
         T.ident polarity n (List.map (fun t -> t inst) nl)
     | exception Not_found -> error place "Unbound type: %s" x
     end
-  | S.TArrow (t1, t2) -> (* TODO *)
+  | S.TArrow (t1, eff, t2) ->
     let t1 = cook_type env (not polarity) t1 in
     let t2 = cook_type env polarity t2 in
+    let te = cook_eff env polarity eff in
     fun inst ->
-      T.arrow polarity (t1 inst) (empty_eff polarity) (t2 inst)
+      T.arrow polarity (t1 inst) (te inst) (t2 inst)
   | S.TTuple l ->
     let l = List.map (cook_type env polarity) l in
     fun inst ->
       T.product polarity (List.map (fun t -> t inst) l)
 
-and cook_var env polarity va t =
-  match va with
-  | ANone -> fun inst -> TyC.VNone
-  | APos _ ->
-    let t = cook_type env polarity t in
-    fun inst -> TyC.VPos (TySSet.singleton (t inst))
-  | ANeg _ ->
-    let t = cook_type env (not polarity) t in
-    fun inst -> TyC.VNeg (TySSet.singleton (t inst))
-  | APosNeg _ ->
-    let tp = cook_type env polarity t in
-    let tn = cook_type env (not polarity) t in
-    fun inst -> TyC.VPosNeg (TySSet.singleton (tp inst), TySSet.singleton (tn inst))
+and cook_arg env polarity (va, b) t =
+  match t with
+  | S.TEff e ->
+    if not b then
+      error e.S.place "A type is expected here, but this is an effect.";
+    let c = cook_var (cook_eff env) (fun x -> x) polarity va e in
+    fun inst -> TyC.AEff (c inst)
+  | S.TType t ->
+    if b then
+      error t.S.place "An effect is expected here, but this is a type.";
+    let c = cook_var (cook_type env) TySSet.singleton polarity va t in
+    fun inst -> TyC.AType (c inst)
+
+and cook_eff env polarity { S.place ; S.value } =
+  let rec to_list = function
+    | S.EEmpty -> [], None
+    | S.EVariable v -> [], Some v
+    | S.EEff (i, e) -> let l, v = to_list e in i :: l, v
+  in
+  let l, v = to_list value in
+  let n = match v with
+    | None -> None
+    | Some x ->
+      let np, nn =
+        try
+          Smap.find ("!" ^ x) env.type_variables
+        with Not_found -> error place "Unbound type variable: !%s" x
+      in
+      Some (if polarity then np else nn)
+  in
+  let l = List.map (fun x -> Smap.find x env.effect_bindings) l in
+  (* TODO: check effect names *)
+  fun (_, einst) ->
+    let w = TyE.create polarity in
+    let em = List.fold_left (fun em e -> Atom.Map.add e (TyESet.empty, polarity) em) Atom.Map.empty l in
+    match n with
+    | None -> w.TyE.flows <- (em, (TyESet.empty, not polarity)); w
+    | Some n ->
+      let v = Atom.Map.find n einst in
+      let em = Atom.Map.merge (fun _ u1 u2 ->
+          match u1, u2 with
+          | None, None -> None
+          | Some u, _ -> Some u
+          | None, Some u -> Some u
+      ) em (fst v.TyE.flows) in
+      w.TyE.flows <- (em, snd v.TyE.flows);
+      Atom.Map.iter (fun name (qs, _) ->
+        TyESet.iter (TyE.add_flow_edge (Some name) w) qs;
+      ) (fst w.TyE.flows);
+      TyESet.iter (TyE.add_flow_edge None w) (fst (snd w.TyE.flows));
+      w
+
+let cook_arg_name = function
+  | S.TTypeVar x -> "'" ^ x
+  | S.TEffectVar x -> "!" ^ x
 
 let rec cook_program env = function
   | { S.value = S.DTerm t ; S.place } :: p ->
@@ -854,10 +939,11 @@ let rec cook_program env = function
     T.Let (nx, nt, cook_program env p)
   | { S.value = S.DTypeSynonym ((args, x), t) ; _ } :: p ->
     let n = Atom.fresh x in
-    let vars = List.map (fun x -> (Atom.fresh x, Atom.fresh x)) args in
-    let vas = List.map (fun (x, y) -> APosNeg (x, y)) vars in
-    let vamp = List.fold_left2 (fun vam x v -> Smap.add x v vam) env.type_variables args vars in
-    let vamn = List.fold_left2 (fun vam x (u, v) -> Smap.add x (v, u) vam) env.type_variables args vars in
+    let args = List.map cook_arg_name args in
+    let vars = List.map (fun x -> (x.[0] = '!', Atom.fresh x, Atom.fresh x)) args in
+    let vas = List.map (fun (b, x, y) -> APosNeg (x, y), b) vars in
+    let vamp = List.fold_left2 (fun vam x (_, u, v) -> Smap.add x (u, v) vam) env.type_variables args vars in
+    let vamn = List.fold_left2 (fun vam x (_, u, v) -> Smap.add x (v, u) vam) env.type_variables args vars in
     let env1p = { env with type_variables = vamp } in
     let env1n = { env with type_variables = vamn } in
     let nenv = { env with
@@ -870,10 +956,11 @@ let rec cook_program env = function
     cook_program nenv p
   | { S.value = S.DNewType ((args, x), l) ; _ } :: p ->
     let n = Atom.fresh x in
-    let vars = List.map (fun x -> (Atom.fresh x, Atom.fresh x)) args in
-    let vas = List.map (fun (x, y) -> APosNeg (x, y)) vars in
-    let vamp = List.fold_left2 (fun vam x v -> Smap.add x v vam) env.type_variables args vars in
-    let vamn = List.fold_left2 (fun vam x (u, v) -> Smap.add x (v, u) vam) env.type_variables args vars in
+    let args = List.map cook_arg_name args in
+    let vars = List.map (fun x -> (x.[0] = '!', Atom.fresh x, Atom.fresh x)) args in
+    let vas = List.map (fun (b, x, y) -> APosNeg (x, y), b) vars in
+    let vamp = List.fold_left2 (fun vam x (_, u, v) -> Smap.add x (u, v) vam) env.type_variables args vars in
+    let vamn = List.fold_left2 (fun vam x (_, u, v) -> Smap.add x (v, u) vam) env.type_variables args vars in
     let env1 = { env with
       type_bindings = Smap.add x n env.type_bindings ;
       type_variance = Atom.Map.add n vas env.type_variance ;

@@ -78,6 +78,10 @@ rule entry = parse
 and token = parse
 | "->"
     { ARROW }
+| "-["
+    { ARROWOPEN }
+| "]->"
+    { ARROWCLOSE }
 | "="
     { EQ }
 | "("
@@ -102,6 +106,12 @@ and token = parse
     { COLON }
 | "'"
     { QUOTE }
+| "!"
+    { BANG }
+| "["
+    { LBRACK }
+| "]"
+    { RBRACK }
 | (lowercase identchar *) as x
     { try Hashtbl.find keywords x with Not_found -> IDENT x }
 | (uppercase identchar *) as x

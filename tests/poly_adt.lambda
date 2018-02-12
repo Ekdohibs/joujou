@@ -18,6 +18,8 @@ let l = Cons ((17, 42), Cons ((12, 33), Nil))
 let _ = print_list (map fst l)
 let _ = print_list (map snd l)
 
+let map_apply = fun g -> map (fun f -> g (f 0))
+
 type 'a t = (int -> 'a -> int) list
 type 'a box = A of 'a t
 
@@ -26,3 +28,44 @@ let tst = fun b -> match b with
 
 let l2 = Cons ((fun x -> fun y -> x + y + 39), Cons ((fun x -> fun y -> x * y + 5), Nil))
 let _ = print_list (map (fun x -> x 2) (tst (A l2)))
+
+effect choose = Choose : int
+let choose = fun a -> fun b ->
+  ifzero Choose then a else b
+
+let f = fun x ->
+  let u = choose 5 12 in
+  let v = choose 3 17 in
+  u + v
+
+let rec append = fun l1 -> fun l2 ->
+  match l1 with
+  | Nil -> l2
+  | Cons (x, l1) -> Cons (x, append l1 l2)
+
+let run_all = fun f ->
+  match f 0 with
+  | x -> Cons (x, Nil)
+  | effect Choose k -> append (k 0) (k 1)
+
+let _ = print_list (run_all f)
+
+type ('a, !p, 'b) func = In of ('a -[!p]-> 'b)
+
+let box_map = In map
+let box_print_list = In print_list
+let box_apply_zero = In (fun f -> f 0)
+let box_choose = In (choose 0)
+
+type ('a, !p, 'b) func_io = InIO of ('a -[io | !p]-> 'b)
+
+let fio_print_list = InIO print_list
+let fio_apply_zero = InIO (fun f -> f 0)
+
+let unbox_io_ap = fun f -> fun x -> match f with InIO f -> f x
+
+type ('a, 'b) only_io_func = IO of ('a -[io]-> 'b)
+let io_print_list = IO print_list
+let io_apply_zero = IO (fun f -> f 0)
+(* should not typecheck *)
+(* let io_choose = IO (choose 0) *)

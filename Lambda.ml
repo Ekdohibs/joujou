@@ -123,6 +123,7 @@ end = struct
     match name with
     | Some name ->
       extend name t1; extend name t2;
+      common_domain t1 t2;
       let qs1, b1 = Atom.Map.find name (fst t1.flows) in
       let qs2, b2 = Atom.Map.find name (fst t2.flows) in
       t1.flows <- (Atom.Map.add name (TyESet.add t2 qs1, b1) (fst t1.flows),
@@ -170,24 +171,30 @@ and TyESet : Set.S with type elt = TyE.t = Set.Make(TyE)
 
 module rec TyC : sig
   type t =
-    | Tident of variance list * tname
+    | Tident of arg list * tname
     | Tarrow of TySSet.t * TyE.t * TySSet.t
     | Tproduct of TySSet.t list
-  and variance =
+  and arg =
+    | AType of TySSet.t variance
+    | AEff of TyE.t variance
+  and 'a variance =
     | VNone
-    | VPos of TySSet.t
-    | VNeg of TySSet.t
-    | VPosNeg of TySSet.t * TySSet.t
+    | VPos of 'a
+    | VNeg of 'a
+    | VPosNeg of 'a * 'a
 end = struct
   type t =
-    | Tident of variance list * tname
+    | Tident of arg list * tname
     | Tarrow of TySSet.t * TyE.t * TySSet.t
     | Tproduct of TySSet.t list
-  and variance =
+  and arg =
+    | AType of TySSet.t variance
+    | AEff of TyE.t variance
+  and 'a variance =
     | VNone
-    | VPos of TySSet.t
-    | VNeg of TySSet.t
-    | VPosNeg of TySSet.t * TySSet.t
+    | VPos of 'a
+    | VNeg of 'a
+    | VPosNeg of 'a * 'a
 end
 
 and TyCSet : sig
@@ -200,26 +207,34 @@ and TyCSet : sig
   val need_resolve : bool -> bool -> t -> t -> bool
 end = struct
   type t = TyC.t list
-  let merge_variance v1 v2 =
+  let merge_variance pol merge v1 v2 =
     let open TyC in
     match v1, v2 with
     | VNone, v | v, VNone -> v
-    | VPos qs1, VPos qs2 -> VPos (TySSet.union qs1 qs2)
-    | VNeg qs1, VNeg qs2 -> VNeg (TySSet.union qs1 qs2)
+    | VPos qs1, VPos qs2 -> VPos (merge pol qs1 qs2)
+    | VNeg qs1, VNeg qs2 -> VNeg (merge (not pol) qs1 qs2)
     | VPos qps1, VPosNeg (qps2, qns2) | VPosNeg (qps2, qns2), VPos qps1 ->
-      VPosNeg (TySSet.union qps1 qps2, qns2)
+      VPosNeg (merge pol qps1 qps2, qns2)
     | VNeg qns1, VPosNeg (qps2, qns2) | VPosNeg (qps2, qns2), VNeg qns1 ->
-      VPosNeg (qps2, TySSet.union qns1 qns2)
+      VPosNeg (qps2, merge (not pol) qns1 qns2)
     | VPosNeg (qps1, qns1), VPosNeg (qps2, qns2) ->
-      VPosNeg (TySSet.union qps1 qps2, TySSet.union qns1 qns2)
+      VPosNeg (merge pol qps1 qps2, merge (not pol) qns1 qns2)
     | VPos qps, VNeg qns | VNeg qns, VPos qps -> VPosNeg (qps, qns)
+  let merge_arg pol a1 a2 =
+    let open TyC in
+    match a1, a2 with
+    | AType v1, AType v2 ->
+      AType (merge_variance pol (fun _ -> TySSet.union) v1 v2)
+    | AEff v1, AEff v2 ->
+      AEff (merge_variance pol TyE.merge v1 v2)
+    | _ -> assert false
   let rec add pol x l =
     let open TyC in
     match x, l with
     | _, [] -> [x]
     | Tident (vs1, n1), Tident (vs2, n2) :: l1 when Atom.equal n1 n2 ->
       assert (List.length vs1 = List.length vs2);
-      Tident (List.map2 merge_variance vs1 vs2, n1) :: l1
+      Tident (List.map2 (merge_arg pol) vs1 vs2, n1) :: l1
     | Tarrow (qsa1, qsb1, qsc1), Tarrow (qsa2, qsb2, qsc2) :: l1 ->
       Tarrow (TySSet.union qsa1 qsa2, TyE.merge pol qsb1 qsb2,
               TySSet.union qsc1 qsc2) :: l1
@@ -325,9 +340,13 @@ let var_succ = function
   | TyC.VPos qs | TyC.VNeg qs -> qs
   | TyC.VPosNeg (qps, qns) -> TySSet.union qps qns
 
+let arg_succ = function
+  | TyC.AEff _ -> TySSet.empty
+  | TyC.AType v -> var_succ v
+
 let tyc_succ = function
   | TyC.Tident (vs, _) ->
-    List.fold_left TySSet.union TySSet.empty (List.map var_succ vs)
+    List.fold_left TySSet.union TySSet.empty (List.map arg_succ vs)
   | TyC.Tarrow (q1, eff, q2) -> TySSet.union q1 q2
   | TyC.Tproduct l -> List.fold_left TySSet.union TySSet.empty l
 
@@ -437,7 +456,7 @@ let rec print_tyc st level pol ff t =
     Format.fprintf ff "%t %s" (fun ff ->
         List.iteri (fun i va ->
             if i > 0 then Format.fprintf ff ", ";
-            print_var st 10 pol ff va) vs
+            print_arg st 10 pol ff va) vs
     ) (Atom.hint n)
   | TyC.Tarrow (qs1, eff, qs2) ->
     pfprintf level 3 3 ff "%a -[@[<hv>%a@]]->@ @[<hv>%a@]"
@@ -452,7 +471,7 @@ let rec print_tyc st level pol ff t =
       ) l
     )
 
-and print_var st level pol ff va =
+and print_var_t st level pol ff va =
   match va with
   | TyC.VNone -> Format.fprintf ff "_"
   | TyC.VPos qs -> Format.fprintf ff "+%a" (print_tyss st 10 pol) qs
@@ -460,6 +479,19 @@ and print_var st level pol ff va =
   | TyC.VPosNeg (qsp, qsn) ->
     Format.fprintf ff "[+%a -%a]"
       (print_tyss st 10 pol) qsp (print_tyss st 10 (not pol)) qsn
+
+and print_var_e st level pol ff va =
+  match va with
+  | TyC.VNone -> Format.fprintf ff "_"
+  | TyC.VPos qs -> Format.fprintf ff "+[%a]" (print_eff st 10 pol) qs
+  | TyC.VNeg qs -> Format.fprintf ff "-[%a]" (print_eff st 10 (not pol)) qs
+  | TyC.VPosNeg (qsp, qsn) ->
+    Format.fprintf ff "[+[%a] -[%a]]"
+      (print_eff st 10 pol) qsp (print_eff st 10 (not pol)) qsn
+
+and print_arg st level pol ff = function
+  | TyC.AType va -> print_var_t st level pol ff va
+  | TyC.AEff va -> print_var_e st level pol ff va
 
 and print_eff st level pol ff t =
   let eff, def = t.TyE.flows in
@@ -558,12 +590,23 @@ let get_eff_print_name i =
   let s = if i > 26 then s ^ string_of_int (i / 11) else s in
   "!" ^ s
 
+let var_add r = function
+  | TyC.VNone -> r
+  | TyC.VPos e | TyC.VNeg e -> TyESet.add e r
+  | TyC.VPosNeg (e1, e2) -> TyESet.add e1 (TyESet.add e2 r)
+
+let arg_add r = function
+  | TyC.AEff v -> var_add r v
+  | TyC.AType _ -> r
+
 let tye_acc qs =
   let r = ref TyESet.empty in
   TySSet.iter (fun q ->
     TyCSet.iter (fun _ c ->
       match c with
       | TyC.Tarrow (_, e, _) -> r := TyESet.add e !r
+      | TyC.Tident (l, _) ->
+        r := List.fold_left arg_add !r l
       | _ -> ()
     ) q.TyS.polarity q.TyS.constructors
   ) qs;
@@ -648,14 +691,18 @@ let prepare_copy l le =
   TyEMap.iter (fun e ne ->
       ne.TyE.flows <- fl_copy e.TyE.flows) em;
   let eff_copy eff = TyEMap.find eff em in
-  let var_copy = function
+  let var_copy cp = function
     | TyC.VNone -> TyC.VNone
-    | TyC.VPos qs -> TyC.VPos (tyss_copy qs)
-    | TyC.VNeg qs -> TyC.VNeg (tyss_copy qs)
-    | TyC.VPosNeg (qps, qns) -> TyC.VPosNeg (tyss_copy qps, tyss_copy qns)
+    | TyC.VPos qs -> TyC.VPos (cp qs)
+    | TyC.VNeg qs -> TyC.VNeg (cp qs)
+    | TyC.VPosNeg (qps, qns) -> TyC.VPosNeg (cp qps, cp qns)
+  in
+  let arg_copy = function
+    | TyC.AType v -> TyC.AType (var_copy tyss_copy v)
+    | TyC.AEff v -> TyC.AEff (var_copy eff_copy v)
   in
   let tyc_copy = function
-    | TyC.Tident (vs, n) -> TyC.Tident (List.map var_copy vs, n)
+    | TyC.Tident (vs, n) -> TyC.Tident (List.map arg_copy vs, n)
     | TyC.Tarrow (qs1, eff, qs2) ->
       TyC.Tarrow (tyss_copy qs1, eff_copy eff, tyss_copy qs2)
     | TyC.Tproduct l -> TyC.Tproduct (List.map tyss_copy l)

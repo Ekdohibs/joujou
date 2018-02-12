@@ -3,7 +3,7 @@
 %token<int> INTLITERAL
 %token FUN IN LET PRINT REC
 %token IFZERO THEN ELSE
-%token ARROW EQ LPAREN RPAREN BAR COMMA STAR SEMISEMI COLON QUOTE
+%token ARROW EQ LPAREN RPAREN BAR COMMA STAR SEMISEMI COLON QUOTE ARROWOPEN ARROWCLOSE LBRACK RBRACK BANG
 %token TYPE OF EFFECT
 %token MATCH WITH
 %token<RawLambda.binop> MULOP ADDOP
@@ -15,7 +15,7 @@
 %nonassoc EFFECT
 %left BAR
 (* %left COMMA *)
-%right ARROW
+%right ARROW ARROWOPEN ARROWCLOSE
 (* %nonassoc IFZERO *)
 %nonassoc ELSE
 %left ADDOP
@@ -63,10 +63,15 @@ program_tail:
 %inline decl:
 | d = placed(decl_) { d }
 
+type_var_decl:
+| QUOTE i = IDENT { TTypeVar i }
+| BANG i = IDENT { TEffectVar i }
+
 type_decl_id:
 | x = IDENT { [], x }
-| QUOTE i = IDENT x = IDENT { [i], x }
-| LPAREN l = separated_nonempty_list(COMMA, preceded(QUOTE, IDENT)) RPAREN x = IDENT { l, x }
+| v = type_var_decl x = IDENT { [v], x }
+| LPAREN l = separated_nonempty_list(COMMA, type_var_decl) RPAREN x = IDENT
+    { l, x }
 
 decl_:
 | LET mode = recursive x = IDENT EQ t = any_term
@@ -87,7 +92,7 @@ effect_decl_case_:
 | c = UIDENT COLON t = ty
     {
       match t.value with
-      | TArrow (t1, t2) -> c, Some t1, t2
+      | TArrow (t1, _, t2) -> c, Some t1, t2
       | _ -> c, None, t
     }
 
@@ -105,15 +110,31 @@ ty_:
 | t = simple_type_ { t }
 | t = simple_type STAR l = separated_nonempty_list(STAR, simple_type)
   { TTuple (t :: l) }
-| t1 = ty ARROW t2 = ty { TArrow (t1, t2) }
+| t1 = ty pl = placed(ARROW) t2 = ty
+  { TArrow (t1, { place = pl.place ; value = EEmpty }, t2) }
+| t1 = ty ARROWOPEN e = eff ARROWCLOSE t2 = ty { TArrow (t1, e, t2) }
 
 simple_type_:
 | LPAREN t = ty_ RPAREN { t }
 | x = IDENT { TConstructor ([], x) }
 | QUOTE x = IDENT { TVariable x }
-| t = simple_type x = IDENT { TConstructor ([t], x) }
-| LPAREN t1 = ty COMMA l = separated_nonempty_list(COMMA, ty) RPAREN x = IDENT
+| t = simple_type x = IDENT { TConstructor ([TType t], x) }
+| LBRACK e = eff RBRACK x = IDENT { TConstructor ([TEff e], x) }
+| LPAREN t1 = ty_or_eff COMMA l = separated_nonempty_list(COMMA, ty_or_eff) RPAREN x = IDENT
   { TConstructor (t1 :: l, x) }
+
+ty_or_eff:
+| t = ty { TType t }
+| LBRACK e = eff RBRACK { TEff e }
+
+%inline eff:
+| e = placed(eff_) { e }
+
+eff_:
+| (* empty *) { EEmpty }
+| BANG i = IDENT { EVariable i }
+| i = IDENT { EEff (i, EEmpty) }
+| i = IDENT BAR e = eff_ { EEff (i, e) }
 
 atomic_term_:
 | LPAREN t = any_term_ RPAREN

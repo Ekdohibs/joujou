@@ -58,16 +58,32 @@ and pattern_or_effect =
   | Effect of constructor placed * pattern option * variable
 
 and ty_ =
-  | TConstructor of ty list * variable
+  | TConstructor of ty_or_eff list * variable
   | TVariable of variable
   | TTuple of ty list
-  | TArrow of ty * ty
+  | TArrow of ty * eff * ty
+
+and ty_or_eff =
+  | TType of ty
+  | TEff of eff
+
+and eff =
+  eff_ placed
+
+and eff_ =
+  | EEmpty
+  | EVariable of variable
+  | EEff of variable * eff_
 
 and ty =
   ty_ placed
 
+and ty_var_decl =
+  | TTypeVar of variable
+  | TEffectVar of variable
+
 and ty_decl_id =
-  variable list * variable
+  ty_var_decl list * variable
 
 and decl_ =
   | DLet of recursive * variable * term
