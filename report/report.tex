@@ -28,9 +28,40 @@
 
 \maketitle
 
+\section{Résumé}
+Les fonctionnalités suivantes ont été ajoutées au compilateur~:
+\begin{itemize}
+\item{Défonctionalisation légère~: lors de l'étape de défonctionalisation, une fonction qui n'a pas de variables libres n'est pas considérée comme une variable locale d'une fonction dans laquelle elle est contenue, et la clôture de cette dernière fonction ne contient pas la première. Ceci est réalisé dans \texttt{Defun.ml}}
+\item{Application efficace d'une fonctions à plusieurs arguments~: une application de fonction à $n$ arguments à $n$ valeurs ne construit pas de clôture intermédiare. Pour cela, le langage intermédiaire \texttt{Tail} a été étendu avec la construction supplémentaire \texttt{ContCall}, dont le comportement dépend du nombre d'arguments fourni par rapport à l'arité attendue de la fonction à appliquer. Sa sémantique est documentée dans \texttt{Tail.ml}, et son introduction a conduit à la modification de \texttt{CPS.ml} et \texttt{Defun.ml}}
+\item{Types de données algébriques et pattern matching~: le langage est étendu en fournissant des tuples, des types de données algébriques, et du pattern matching, y compris profond. Ce changement est a nécessité une modification de la plupart des fichiers, mais le plus intéressant est sans contestation dans \texttt{CPS.ml}, qui compile le pattern matching en transformation CPS.}
+\item{Effets algébriques~: ceux-ci permettent en particulier de créer des opérateurs de contrôle délimité, ou des exceptions. Aucun des deux n'est fourni par défaut cependant, leur implantation est à la charge de l'utilisat\textperiodcentered{}eur\textperiodcentered{}rice (de manière générale, rien n'est fourni par défaut~: il faut soi-même définir des listes si on souhaite les utiliser). À nouveau, une grande partie de la chaîne de compilation est modifiée, mais la partie intéressante est dans \texttt{CPS.ml} qui se charge d'éliminer complètement les effets lors de la traduction en CPS. Cette dernière est très largement basée sur \cite{hillerstrom2017continuation}.}
+\item{Garbage collector~: le programme compilé est équipé d'un garbage collector. Il repose, comme celui d'OCaml, sur des entiers de seulement 63 bits permettant ainsi de distinguer les entiers des pointeurs. Il est prévu pour être générationnel, mais seul la gestion du tas mineur est implantée. Cependant, même avec un tas mineur extrêmement petit (2048 mots de 8 octets), les essais pratiques montre que celui-ci se révèle très efficace, permettant de récupérer près de 95\%{} des mots alloués. Il se trouve majoritairement dans \texttt{prologue.h}, avec \texttt{Finish.ml} gérant l'interface entre code compilé et le garbage collector.}
+\item{Inférence de type statique~: le programme est typé statiquement, avec inférence de type et des effets algébriques. Ainsi, un programme lançant des effets non rattrapés n'est pas accepté. La lourdeur caractéristique des déclarations de fonctions de Java est évitée grâce à l'inférence de ces effets, ainsi que des types en général. Comme la présence d'effets nous conduit à du sous-typage, tout le typage est effectué en utilisant \emph{MLsub}, présenté dans \cite{dolan2017algebraic}. Les règles de typage (mais pas d'inférence) sont également présentées ci-dessous. On pourra se référer à la présentation de \emph{MLsub} pour plus de détails sur l'algorithme d'inférence de types. Le code implantant ces fonctionnalités est présent dans \texttt{Cook.ml} et \texttt{Lambda.ml}. Une limite à l'implantation actuelle est qu'elle ne fait pas de vérification d'exhaustivité ; en particulier, un programme qui rattrape seulement certaines instances d'un effet peuvent être incorrectement reportés comme ne levant pas cet effet. Ajouter une vérification d'exhaustivité permettrait de corriger cela.}
+\end{itemize}
+
+\section{Système de types}
+
+Les types définissables par l'utilisateur sont de la forme~:
+\begin{align*}
+  \tau &::= \texttt{'}\alpha \mid \tau \xrightarrow{\mathcal{E}} \tau \mid \tau * \dots * \tau \mid ((\tau \mid \mathcal{E}), \dots, (\tau \mid \mathcal{E}))~\texttt{constr} \\
+  \mathcal{E} &::= (\texttt{!}\beta \mid []) \sqcup \texttt{E}_1 \sqcup \dots \sqcup \texttt{E}_n
+\end{align*}
+
+Ces types sont ensuite étendus par des types récursifs, des types unions et intersections, ainsi que les types $\top$ et $\bot$, avec des règles de sous-typage structurelles (la seule information de sous-typage intéressante est au niveau des feuilles, pour les effets ; se référer à \cite{dolan2017algebraic} pour plus de détails sur le sous-typage). Pour les types d'effets, ils sont étendus en utilisant une variable de présence par effet différent pouvant être présent, plus une autre variable de présence comme valeur par défaut pour tous les autres effets.
+
+Cette extension des types permet d'avoir un algorithme d'inférence de types complet, décidable, produisant des types compacts (sans contraintes !) ; tandis que la restriction des types définissables par l'utilisateur permet d'assurer la polarité des types pour que cet algorithme fonctionne (voir \cite{dolan2017algebraic}).
+
+On note que les constructeurs de types polymorphes peuvent prendre des arguments qui sont soit des types, soit des effets. Il convient donc de vérifier que les types sont bien sortés. De plus, on remarque qu'il n'y a pas de polymorphisme au niveau des effets.
+
+On définit également~:
+\begin{align*}
+[\Delta_1]\tau_1!\mathcal{E}_1 \leqslant [\Delta_2]\tau_2!\mathcal{E}_2 ~\equiv&\quad \tau_1 \leqslant \tau_2 \\&\wedge \mathcal{E}_1 \leqslant \mathcal{E}_2 \\&\wedge \mathrm{dom}~\Delta_1 \subseteq \mathrm{dom}~\Delta_2 \\&\wedge (\forall x \in \mathrm{dom}~\Delta_1, \Delta_2(x) \leqslant \Delta_1(x)) \\
+[\Delta_1]\tau_1!\mathcal{E}_1 \leqslant^\forall [\Delta_2]\tau_2!\mathcal{E}_2~\equiv&~\exists \rho / \rho([\Delta_1]\tau_1!\mathcal{E}_1) \leqslant [\Delta_2]\tau_2!\mathcal{E}_2
+\end{align*}
+
 \section{Règles de typage}
 
-Par simplicité, on suppose dans la suite que tous les constructeurs de types algébriques et d'effets sont d'arité exactement 1, quitte à remplacer le paramètre par un tuple (éventuellement vide). On suppose également que les pattern matching sont tous complets et ne sont pas profonds, par simplicité.
+Par simplicité, on suppose dans la suite que tous les constructeurs de types algébriques et d'effets sont d'arité exactement 1, quitte à remplacer le paramètre par un tuple (éventuellement vide). On suppose également que les pattern matching sont tous complets et ne sont pas profonds, par simplicité. Enfin, le type des constructeurs polymorphes est implicitement instancié (ce qui revient à ajouter une contrainte de sous-typage).
 
 \renewcommand{\DefTirName}{\LeftTirName}
 
@@ -50,5 +81,8 @@ Par simplicité, on suppose dans la suite que tous les constructeurs de types al
   \inferrule[MatchEffect]{\Pi\Vdash e : [\Delta]\tau'!\{(\mathtt{E}_{l_i} : \top)_{i \in \llbracket 1, n \rrbracket}, (\mathtt{E}_l : \mathcal{E}_l)_{l \notin \{l_1, \dots, l_n\}}\} \\ \Pi\Vdash e' : [\Delta, x : \tau']\tau!\mathcal{E} \\ \forall i \in \llbracket 1, n \rrbracket, \vdash \mathtt{E}_{l_i} : \tau_i \rightarrow \tau'_i \\ \forall i \in \llbracket 1, n \rrbracket, \Pi\Vdash e_i : [\Delta, x_i : \tau_i, k_i : \tau'_i \xrightarrow{\mathcal{E}} \tau]\tau!\mathcal{E}}{\Pi\Vdash \mathrm{match}~e~\mathrm{with}~x\rightarrow e'~|~\mathrm{effect}~\mathtt{E}_{l_1}~x_1~k_1\rightarrow e_1~|\dots|~\mathrm{effect}~\mathtt{E}_{l_n}~x_n~k_n\rightarrow e_n : [\Delta]\tau!\mathcal{E}} \and
   \inferrule[Sub]{\Pi\Vdash e : [\Delta]\tau!\mathcal{E} \\ [\Delta]\tau!\mathcal{E} \leqslant^\forall [\Delta']\tau'!\mathcal{E'}}{\Pi\Vdash e : [\Delta']\tau'!\mathcal{E'}}
 \end{mathpar}
+
+\bibliography{report}{}
+\bibliographystyle{plain}
 
 \end{document}
