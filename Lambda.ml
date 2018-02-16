@@ -347,7 +347,7 @@ let arg_succ = function
 let tyc_succ = function
   | TyC.Tident (vs, _) ->
     List.fold_left TySSet.union TySSet.empty (List.map arg_succ vs)
-  | TyC.Tarrow (q1, eff, q2) -> TySSet.union q1 q2
+  | TyC.Tarrow (q1, _, q2) -> TySSet.union q1 q2
   | TyC.Tproduct l -> List.fold_left TySSet.union TySSet.empty l
 
 let tys_succ q =
@@ -362,7 +362,7 @@ let decompose_flow elms =
   let rec loop fl =
     let best = ref (TySSet.empty, TySSet.empty) in
     let best_v = ref 0 in
-    TySMap.iter (fun q qs1 ->
+    TySMap.iter (fun _ qs1 ->
       match TySSet.elements qs1 with
       | [] -> ()
       | q2 :: qs ->
@@ -409,7 +409,7 @@ let decompose_flow_e name elms =
   let rec loop fl =
     let best = ref (TyESet.empty, TyESet.empty) in
     let best_v = ref 0 in
-    TyEMap.iter (fun q qs1 ->
+    TyEMap.iter (fun _ qs1 ->
       match TyESet.elements qs1 with
       | [] -> ()
       | q2 :: qs ->
@@ -471,7 +471,7 @@ let rec print_tyc st level pol ff t =
       ) l
     )
 
-and print_var_t st level pol ff va =
+and print_var_t st _ pol ff va =
   match va with
   | TyC.VNone -> Format.fprintf ff "_"
   | TyC.VPos qs -> Format.fprintf ff "+%a" (print_tyss st 10 pol) qs
@@ -480,7 +480,7 @@ and print_var_t st level pol ff va =
     Format.fprintf ff "[+%a -%a]"
       (print_tyss st 10 pol) qsp (print_tyss st 10 (not pol)) qsn
 
-and print_var_e st level pol ff va =
+and print_var_e st _ pol ff va =
   match va with
   | TyC.VNone -> Format.fprintf ff "_"
   | TyC.VPos qs -> Format.fprintf ff "+[%a]" (print_eff st 10 pol) qs
@@ -493,18 +493,18 @@ and print_arg st level pol ff = function
   | TyC.AType va -> print_var_t st level pol ff va
   | TyC.AEff va -> print_var_e st level pol ff va
 
-and print_eff st level pol ff t =
+and print_eff st _ pol ff t =
   let eff, def = t.TyE.flows in
-  let _, _, _, (enamee, enamed) = st in
+  let _, _, _, (enamee, _) = st in
   let get name = try Atom.Map.find name eff with Not_found -> def in
   let l = List.map (fun (name, _) -> (Some name, get name))
       (Atom.Map.bindings enamee) @ [(None, def)] in
   let printed = ref false in
-  List.iteri (fun i (name, d) ->
+  List.iter (fun (name, d) ->
       printed := print_ep st 6 pol name ff d !printed
     ) l
 
-and print_ep st level pol name ff (es, b) needs_sep =
+and print_ep st _ pol name ff (es, b) needs_sep =
   let _, _, _, (enamee, enamed) = st in
   let mp = match name with None -> enamed | Some name -> Atom.Map.find name enamee in
   let get t = try TyEMap.find t mp with Not_found -> SSet.empty in

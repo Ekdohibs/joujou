@@ -44,7 +44,6 @@ type tavar =
 module Smap = Map.Make(String)
 type env = {
   bindings : (binding * Atom.atom) Smap.t ;
-  (*  fvars : TVSet.t ; *)
   type_bindings : Atom.atom Smap.t ;
   type_variables : (Atom.atom * Atom.atom) Smap.t ;
   type_variance : (tavar * bool) list Atom.Map.t ;
@@ -278,7 +277,7 @@ and biunify_tyss env t qps qms =
     ) qms
   ) qps
 
-and merge_eff env name e1 e2 =
+and merge_eff _ name e1 e2 =
   let open TyE in
   assert (e1.polarity = e2.polarity);
   (match name with
@@ -300,7 +299,7 @@ and merge_eff env name e1 e2 =
       e1.flows <- (fst e1.flows, (fst (snd e1.flows), b1 || b2))
   | Some name -> e1.flows <- (Atom.Map.add name (fst (get e1), b1 || b2) (fst e1.flows), snd e1.flows)
 
-and biunify_eff_excl ex env t ep em =
+and biunify_eff_excl ex env _ ep em =
   TyE.common_domain ep em;
   assert (ep.TyE.polarity && not em.TyE.polarity);
   let (epf, epd) = ep.TyE.flows in
@@ -345,7 +344,6 @@ and biunify_args env t ap am =
   | _ -> assert false
 
 let biunify_eff_excl excl env = biunify_eff_excl excl env (ref TySPSet.empty)
-let biunify_eff env = biunify_eff env (ref TySPSet.empty)
 let biunify env = biunify_tys env (ref TySPSet.empty)
 
 let not_subtype_msg : _ format6 =
@@ -457,7 +455,7 @@ let create_arg_pair (v, is_effect) =
 let create_var_pairs l =
   List.split (List.map create_arg_pair l)
 
-let rec is_irrefutable { S.place ; S.value } =
+let rec is_irrefutable { S.value ; _ } =
   match value with
   | S.PVar _ -> true
   | S.PTuple l -> List.for_all is_irrefutable l
@@ -648,7 +646,7 @@ let rec cook_term env { S.place ; S.value } =
     let nl = List.map (fun (p, t1) ->
       let np, dv, ef = cook_pattern_or_effect env sc.typ rtyp erp p in
       matched_effects := Atom.Set.union !matched_effects ef;
-      let nenv = Smap.fold (fun x (a, t) env -> add_bound x a env) dv env in
+      let nenv = Smap.fold (fun x (a, _) env -> add_bound x a env) dv env in
       let sc1, nt1 = cook_term nenv t1 in
       check_biunify t1.S.place env sc1.typ rtyn;
       check_biunify_eff t1.S.place env sc1.eff ern;
@@ -828,7 +826,7 @@ and cook_let env recursive x t =
 
 let cook_var cook build polarity va t =
   match va with
-  | ANone -> fun inst -> TyC.VNone
+  | ANone -> fun _ -> TyC.VNone
   | APos _ ->
     let t = cook polarity t in
     fun inst -> TyC.VPos (build (t inst))

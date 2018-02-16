@@ -68,11 +68,6 @@ let evar (x : S.variable) : T.expr =
 let univ : T.type_spec =
   T.Named "univ"
 
-(* The type of integers. *)
-
-let int : T.type_spec =
-  T.Named "int64_t"
-
 (* The type [char] appears in the type of [main]. *)
 
 let char : T.type_spec =
@@ -320,14 +315,6 @@ let declare_main_function : T.declaration =
 
 type decl_or_fun =
   T.declaration_or_function
-
-let define (decl : T.declaration) (st : finish_state) (t : S.term) : decl_or_fun =
-  T.Function (
-    [],    (* no comments *)
-    false, (* not inlined *)
-    decl,
-    T.Compound [finish_term st t]
-  )
 
 let define_ordinary_function (st : finish_state) (S.Fun (f, xs, t)) : decl_or_fun =
   let b = fct_max_total_alloc t in
