@@ -3,3 +3,8 @@
 _build
 joujou
 test/_build
+report/*
+!report/Makefile
+!report/report.tex
+!report/report.pdf
+!report/report.bib
