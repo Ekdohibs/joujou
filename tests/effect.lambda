@@ -113,3 +113,9 @@ let test7 = fun f ->
   | effect Get k -> k 1
 
 let _ = print (test7 test6)
+
+effect t = T : intlist -> int
+let test8 = fun f ->
+  match f 0 with
+  | x -> x
+  | effect T (Cons (x, l)) k -> x

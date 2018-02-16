@@ -457,6 +457,13 @@ let create_arg_pair (v, is_effect) =
 let create_var_pairs l =
   List.split (List.map create_arg_pair l)
 
+let rec is_irrefutable { S.place ; S.value } =
+  match value with
+  | S.PVar _ -> true
+  | S.PTuple l -> List.for_all is_irrefutable l
+  | S.POr (p1, p2) -> is_irrefutable p1 || is_irrefutable p2
+  | S.PConstructor _ -> false
+
 let rec cook_term env { S.place ; S.value } =
   match value with
   | S.Var x -> begin
@@ -691,10 +698,16 @@ and cook_pattern_or_effect env ty rty ep = function
       | Some _, None ->
         error place "The effect constructor %s expects 0 arguments, but is applied here to 1 argument" c
     in
-    (* For now, assure this means the effect is matched (no exhausitivty checking). *)
     let kty = T.arrow true (do_instanciate env false ty2n [] []) ep rty in
+    (* Conservative exhaustivity checking: assume the effect is matched only if the pattern is irrefutable *)
+    let matched_effects =
+      if match p with None -> true | Some p -> is_irrefutable p then
+        Atom.Set.singleton ename
+      else
+        Atom.Set.empty
+    in
     let kv = Atom.fresh k in
-      T.Effect (np, kv), (Smap.add k (kv, kty) dv), Atom.Set.singleton ename
+      T.Effect (np, kv), (Smap.add k (kv, kty) dv), matched_effects
 
 and cook_pattern env mapped_vars ty { S.value ; S.place } =
   match value with
