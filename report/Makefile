@@ -8,3 +8,4 @@ $(TARGET).pdf: $(TARGET).tex
 
 clean:
 	rm -f *~
+	@ latexmk -c -bibtex
