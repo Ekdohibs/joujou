@@ -1,1 +1,14 @@
-Note: see report/report.pdf for details about the extra implemented features.
+joujou is a compiler from a small functional language to C.
+
+It supports curried functions, algebraic data types and deep pattern matching,
+algebraic effects (with multishot continuations), a static type system with
+inference of types and effects, supporting subtyping. It also has a generational
+garbage collector included in compiled programs (only the minor generation is
+actually collected for now, though).
+
+Its compilation scheme rests on continuation-passing style transformation and
+defunctionalisation -- as such, compiled programs are not very efficient. It
+however supports efficient application of a n-ary function to all of its
+arguments, without building intermediate closures.
+
+Note: see report/report.pdf (in French) for details about the implemented features.
