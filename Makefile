@@ -4,6 +4,7 @@ JOUJOU     := joujou
 DIRS       := kremlin,alphalib
 OCAMLBUILD :=\
   ocamlbuild \
+    -cflag -unsafe-string \
     -classic-display \
     -j 4 \
     -use-ocamlfind \

@@ -1,0 +1,48 @@
+
+let g = fun m -> fun z -> z;;
+
+let h = fun w -> g w;;
+
+let y = fun x -> h 12 x;;
+
+match (h 3 17) with t -> print (t + 1);;
+match (y 5) with t -> print (t + 1);;
+
+match 42 with x -> print x;;
+
+effect test = Test : int;;
+
+let _ =
+  match print (h 0 1) with
+  | effect Test k -> k 990
+  | z -> print (z + 13)
+;;
+
+
+effect exit = Exit : int;;
+type unit = Tt;;
+type ('a, !r) typ = T of (unit -[exit | !r]-> 'a -[!r]-> 'a);;
+type ('a, !r) typ2 = T2 of (unit -[!r]-> 'a -[!r]-> 'a);;
+
+let g = fun m ->
+  let w = fun x -> match x with Tt -> let n = ifzero m then Test else Exit in fun z -> ifzero n then z else z+1 in
+  let ww = T w in
+  ww
+
+let g1 = fun m -> match (match g m with | T w -> w Tt) with effect Test k -> k 8 | effect Exit k -> k 0 | z -> z;;
+
+let _ =
+  match (
+  let _ = print (g1 0 18) in
+  print (g1 1 18)) with
+  effect Test k -> k 990
+  | z -> z
+
+let f =
+  let w = fun x -> match x with Tt -> let n = Test in fun z -> ifzero n then z else z in
+  let ww = T w in
+  let yolo = fun z ->
+  let aux = fun t -> match t with T g -> 0 in
+  let aux2 = fun t2 -> match t2 with T2 g -> aux (T g) in
+  z 0 in
+  0

@@ -94,6 +94,8 @@ let process filename =
   |> Tail.optimize
   |> dump "Tail - 2" Tail.show_term
   |> Defun.defun_term
+  |> dump "Apply" Apply.show_program
+  |> Dispatch.dispatch_program
   |> dump "Top" Top.show_program
   |> Finish.finish_program
   |> dump "C" C.show_program

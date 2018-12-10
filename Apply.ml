@@ -3,8 +3,9 @@
    the ordering of computations is explicit and every function call is a
    tail call. Furthermore, lambda-abstractions disappear. A memory block
    [Con] now contains an integer tag followed with a number of fields,
-   which hold values. A [switch] construct appears, which allows testing
-   the tag of a memory block. A number of (closed, mutually recursive)
+   which hold values. [TailCall] and [ContCall] remain, but call a function
+   described by a memory block.
+   A number of (closed, mutually recursive)
    functions can be defined at the top level. *)
 
 type tag =
@@ -26,7 +27,7 @@ and value = Tail.value =
 
 (* A block contains an integer tag, followed with a number of fields. *)
 
-and block = Apply.block =
+and block =
   | Con of tag * value list
 
 (* The construct [Swi (v, branches)] reads the integer tag stored in the
@@ -36,7 +37,8 @@ and block = Apply.block =
 
 and term =
   | Exit
-  | TailCall of variable * value list
+  | TailCall of value * value list
+  | ContCall of value * value * value list
   | Print of value * term
   | LetVal of variable * value * term
   | LetBlo of variable * block * term
@@ -51,11 +53,11 @@ and term =
 and branch =
   | Branch of tag * variable list * term
 
-(* A toplevel function declaration mentions the function's name, formal
-   parameters, and body. *)
+(* A toplevel function declaration mentions the function's name, tag, free
+   variables, formal parameters, and body. *)
 
 and function_declaration =
-  | Fun of variable * variable list * term
+  | Fun of variable * tag * variable list * variable list * term
 
 (* A complete program consits of a set of toplevel function declarations
    and a term (the "main program"). The functions are considered mutually
@@ -93,3 +95,6 @@ let parallel_let (xs : variable list) (vs : value list) (t : term) =
   assert (List.length xs = List.length vs);
   assert (Atom.Set.disjoint (Atom.Set.of_list xs) (Tail.fv_values vs));
   sequential_let xs vs t
+
+let gen_tag =
+  let c = ref 0 in fun () -> (incr c; !c - 1)
