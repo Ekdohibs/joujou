@@ -1,0 +1,8 @@
+effect get = Get : int
+effect set = Set : int -> int
+
+let run_state = fun f ->
+  match f 0 with
+  | x -> fun s -> x
+  | effect Get k -> fun s -> k s
+  | effect Set s k -> fun _ -> k 0

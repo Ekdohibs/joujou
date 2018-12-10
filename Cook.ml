@@ -165,15 +165,19 @@ let rec simpl_tyss env st polarity qs =
   try PTySSetMap.find (polarity, qs) !st
   with Not_found ->
     let q = merge_all env polarity qs in
-    let r = simpl_tys env st polarity q in
+    let r = TyS.create polarity in
     st := PTySSetMap.add (polarity, qs) r !st;
+    simpl_tys_in env st polarity q r;
     r
 
 and simpl_tys env st polarity q =
   let q2 = TyS.create polarity in
-  TySSet.iter (TyS.add_flow_edge q2) q.TyS.flow;
-  q2.TyS.constructors <- List.map (simpl_tyc env st polarity) q.TyS.constructors;
+  simpl_tys_in env st polarity q q2;
   q2
+
+and simpl_tys_in env st polarity q q2 =
+  TySSet.iter (TyS.add_flow_edge q2) q.TyS.flow;
+  q2.TyS.constructors <- List.map (simpl_tyc env st polarity) q.TyS.constructors
 
 and simpl_tyc env st polarity c =
   let open TyC in
